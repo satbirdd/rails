@@ -3,6 +3,7 @@ require 'models/post'
 require 'models/comment'
 require 'models/developer'
 require 'models/computer'
+require 'models/vehicle'
 
 class DefaultScopingTest < ActiveRecord::TestCase
   fixtures :developers, :posts, :comments
@@ -151,6 +152,18 @@ class DefaultScopingTest < ActiveRecord::TestCase
     expected_7 = Developer.order('salary DESC').collect(&:name)
     received_7 = DeveloperOrderedBySalary.where(Developer.arel_table[:name].eq('David')).unscope(where: :name).collect(&:name)
     assert_equal expected_7, received_7
+  end
+
+  def test_unscope_comparison_where_clauses
+    # unscoped for WHERE (`developers`.`id` <= 2)
+    expected = Developer.order('salary DESC').collect(&:name)
+    received = DeveloperOrderedBySalary.where(id: -Float::INFINITY..2).unscope(where: :id).collect { |dev| dev.name }
+    assert_equal expected, received
+
+    # unscoped for WHERE (`developers`.`id` < 2)
+    expected = Developer.order('salary DESC').collect(&:name)
+    received = DeveloperOrderedBySalary.where(id: -Float::INFINITY...2).unscope(where: :id).collect { |dev| dev.name }
+    assert_equal expected, received
   end
 
   def test_unscope_multiple_where_clauses
@@ -440,5 +453,10 @@ class DefaultScopingTest < ActiveRecord::TestCase
     scope = DeveloperCalledJamis.david2
     assert_equal 1, scope.where_clause.ast.children.length
     assert_equal Developer.where(name: "David"), scope
+  end
+
+  def test_with_abstract_class_where_clause_should_not_be_duplicated
+    scope = Bus.all
+    assert_equal scope.where_clause.ast.children.length, 1
   end
 end

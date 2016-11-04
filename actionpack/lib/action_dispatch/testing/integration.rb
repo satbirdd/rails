@@ -81,7 +81,7 @@ module ActionDispatch
       #
       #   xhr :get, '/feed', params: { since: 201501011400 }
       def xml_http_request(request_method, path, *args)
-        if kwarg_request?(*args)
+        if kwarg_request?(args)
           params, headers, env = args.first.values_at(:params, :headers, :env)
         else
           params = args[0]
@@ -131,35 +131,35 @@ module ActionDispatch
       # Performs a GET request, following any subsequent redirect.
       # See +request_via_redirect+ for more information.
       def get_via_redirect(path, *args)
-        ActiveSupport::Deprecation.warn('`get_via_redirect` is deprecated and will be removed in the next version of Rails. Please use follow_redirect! manually after the request call for the same behavior.')
+        ActiveSupport::Deprecation.warn('`get_via_redirect` is deprecated and will be removed in Rails 5.1. Please use follow_redirect! manually after the request call for the same behavior.')
         request_via_redirect(:get, path, *args)
       end
 
       # Performs a POST request, following any subsequent redirect.
       # See +request_via_redirect+ for more information.
       def post_via_redirect(path, *args)
-        ActiveSupport::Deprecation.warn('`post_via_redirect` is deprecated and will be removed in the next version of Rails. Please use follow_redirect! manually after the request call for the same behavior.')
+        ActiveSupport::Deprecation.warn('`post_via_redirect` is deprecated and will be removed in Rails 5.1. Please use follow_redirect! manually after the request call for the same behavior.')
         request_via_redirect(:post, path, *args)
       end
 
       # Performs a PATCH request, following any subsequent redirect.
       # See +request_via_redirect+ for more information.
       def patch_via_redirect(path, *args)
-        ActiveSupport::Deprecation.warn('`patch_via_redirect` is deprecated and will be removed in the next version of Rails. Please use follow_redirect! manually after the request call for the same behavior.')
+        ActiveSupport::Deprecation.warn('`patch_via_redirect` is deprecated and will be removed in Rails 5.1. Please use follow_redirect! manually after the request call for the same behavior.')
         request_via_redirect(:patch, path, *args)
       end
 
       # Performs a PUT request, following any subsequent redirect.
       # See +request_via_redirect+ for more information.
       def put_via_redirect(path, *args)
-        ActiveSupport::Deprecation.warn('`put_via_redirect` is deprecated and will be removed in the next version of Rails. Please use follow_redirect! manually after the request call for the same behavior.')
+        ActiveSupport::Deprecation.warn('`put_via_redirect` is deprecated and will be removed in Rails 5.1. Please use follow_redirect! manually after the request call for the same behavior.')
         request_via_redirect(:put, path, *args)
       end
 
       # Performs a DELETE request, following any subsequent redirect.
       # See +request_via_redirect+ for more information.
       def delete_via_redirect(path, *args)
-        ActiveSupport::Deprecation.warn('`delete_via_redirect` is deprecated and will be removed in the next version of Rails. Please use follow_redirect! manually after the request call for the same behavior.')
+        ActiveSupport::Deprecation.warn('`delete_via_redirect` is deprecated and will be removed in Rails 5.1. Please use follow_redirect! manually after the request call for the same behavior.')
         request_via_redirect(:delete, path, *args)
       end
     end
@@ -291,16 +291,16 @@ module ActionDispatch
         end
 
         def process_with_kwargs(http_method, path, *args)
-          if kwarg_request?(*args)
+          if kwarg_request?(args)
             process(http_method, path, *args)
           else
-            non_kwarg_request_warning if args.present?
+            non_kwarg_request_warning if args.any?
             process(http_method, path, { params: args[0], headers: args[1] })
           end
         end
 
         REQUEST_KWARGS = %i(params headers env xhr)
-        def kwarg_request?(*args)
+        def kwarg_request?(args)
           args[0].respond_to?(:keys) && args[0].keys.any? { |k| REQUEST_KWARGS.include?(k) }
         end
 
@@ -325,7 +325,11 @@ module ActionDispatch
           if path =~ %r{://}
             location = URI.parse(path)
             https! URI::HTTPS === location if location.scheme
-            host! "#{location.host}:#{location.port}" if location.host
+            if url_host = location.host
+              default = Rack::Request::DEFAULT_PORTS[location.scheme]
+              url_host += ":#{location.port}" if default != location.port
+              host! url_host
+            end
             path = location.query ? "#{location.path}?#{location.query}" : location.path
           end
 
@@ -350,15 +354,15 @@ module ActionDispatch
           if xhr
             headers ||= {}
             headers['HTTP_X_REQUESTED_WITH'] = 'XMLHttpRequest'
-            headers['HTTP_ACCEPT'] ||= [Mime::JS, Mime::HTML, Mime::XML, 'text/xml', Mime::ALL].join(', ')
+            headers['HTTP_ACCEPT'] ||= [Mime[:js], Mime[:html], Mime[:xml], 'text/xml', '*/*'].join(', ')
           end
 
           # this modifies the passed request_env directly
           if headers.present?
-            Http::Headers.new(request_env).merge!(headers)
+            Http::Headers.from_hash(request_env).merge!(headers)
           end
           if env.present?
-            Http::Headers.new(request_env).merge!(env)
+            Http::Headers.from_hash(request_env).merge!(env)
           end
 
           session = Rack::Test::Session.new(_mock_session)
@@ -371,10 +375,11 @@ module ActionDispatch
           @request  = ActionDispatch::Request.new(session.last_request.env)
           response = _mock_session.last_response
           @response = ActionDispatch::TestResponse.from_response(response)
+          @response.request = @request
           @html_document = nil
           @url_options = nil
 
-          @controller = session.last_request.env['action_controller.instance']
+          @controller = @request.controller_instance
 
           response.status
         end
@@ -391,7 +396,7 @@ module ActionDispatch
 
       attr_reader :app
 
-      def before_setup
+      def before_setup # :nodoc:
         @app = nil
         @integration_session = nil
         super
@@ -429,7 +434,6 @@ module ActionDispatch
           # reset the html_document variable, except for cookies/assigns calls
           unless method == 'cookies' || method == 'assigns'
             @html_document = nil
-            reset_template_assertion
           end
 
           integration_session.__send__(method, *args).tap do
@@ -584,7 +588,7 @@ module ActionDispatch
   #       https!(false)
   #       get "/articles/all"
   #       assert_response :success
-  #       assert assigns(:articles)
+  #       assert_select 'h1', 'Articles'
   #     end
   #   end
   #
@@ -623,7 +627,7 @@ module ActionDispatch
   #         def browses_site
   #           get "/products/all"
   #           assert_response :success
-  #           assert assigns(:products)
+  #           assert_select 'h1', 'Products'
   #         end
   #       end
   #

@@ -1,24 +1,9 @@
-
 ActiveRecord::Schema.define do
   def except(adapter_names_to_exclude)
     unless [adapter_names_to_exclude].flatten.include?(adapter_name)
       yield
     end
   end
-
-  #put adapter specific setup here
-  case adapter_name
-  when "PostgreSQL"
-    enable_extension!('uuid-ossp', ActiveRecord::Base.connection)
-    create_table :uuid_parents, id: :uuid, force: true do |t|
-      t.string :name
-    end
-    create_table :uuid_children, id: :uuid, force: true do |t|
-      t.string :name
-      t.uuid :uuid_parent_id
-    end
-  end
-
 
   # ------------------------------------------------------------------- #
   #                                                                     #
@@ -51,6 +36,7 @@ ActiveRecord::Schema.define do
 
   create_table :aircraft, force: true do |t|
     t.string :name
+    t.integer :wheels_count, default: 0, null: false
   end
 
   create_table :articles, force: true do |t|
@@ -114,6 +100,10 @@ ActiveRecord::Schema.define do
     t.column :status, :integer, default: 0
     t.column :read_status, :integer, default: 0
     t.column :nullable_status, :integer
+    t.column :language, :integer, default: 0
+    t.column :author_visibility, :integer, default: 0
+    t.column :illustrator_visibility, :integer, default: 0
+    t.column :font_size, :integer, default: 0
   end
 
   create_table :booleans, force: true do |t|
@@ -124,7 +114,7 @@ ActiveRecord::Schema.define do
   create_table :bulbs, force: true do |t|
     t.integer :car_id
     t.string  :name
-    t.boolean :frickinawesome
+    t.boolean :frickinawesome, default: false
     t.string :color
   end
 
@@ -139,6 +129,8 @@ ActiveRecord::Schema.define do
     t.column :lock_version, :integer, null: false, default: 0
     t.timestamps null: false
   end
+
+  create_table :carriers, force: true
 
   create_table :categories, force: true do |t|
     t.string :name, null: false
@@ -215,6 +207,14 @@ ActiveRecord::Schema.define do
   add_index :companies, [:firm_id, :type], name: "company_partial_index", where: "rating > 10"
   add_index :companies, :name, name: 'company_name_index', using: :btree
 
+  create_table :content, force: true do |t|
+    t.string :title
+  end
+
+  create_table :content_positions, force: true do |t|
+    t.integer :content_id
+  end
+
   create_table :vegetables, force: true do |t|
     t.string :name
     t.integer :seller_id
@@ -246,6 +246,11 @@ ActiveRecord::Schema.define do
     t.string  :gps_location
   end
 
+  create_table :customer_carriers, force: true do |t|
+    t.references :customer
+    t.references :carrier
+  end
+
   create_table :dashboards, force: true, id: false do |t|
     t.string :dashboard_id
     t.string :name
@@ -253,11 +258,21 @@ ActiveRecord::Schema.define do
 
   create_table :developers, force: true do |t|
     t.string   :name
+    t.string   :first_name
     t.integer  :salary, default: 70000
-    t.datetime :created_at
-    t.datetime :updated_at
-    t.datetime :created_on
-    t.datetime :updated_on
+    t.integer :firm_id
+    t.integer :mentor_id
+    if subsecond_precision_supported?
+      t.datetime :created_at, precision: 6
+      t.datetime :updated_at, precision: 6
+      t.datetime :created_on, precision: 6
+      t.datetime :updated_on, precision: 6
+    else
+      t.datetime :created_at
+      t.datetime :updated_at
+      t.datetime :created_on
+      t.datetime :updated_on
+    end
   end
 
   create_table :developers_projects, force: true, id: false do |t|
@@ -278,6 +293,11 @@ ActiveRecord::Schema.define do
     t.integer :breeder_id
     t.integer :dog_lover_id
     t.string  :alias
+  end
+
+  create_table :doubloons, force: true do |t|
+    t.integer :pirate_id
+    t.integer :weight
   end
 
   create_table :edges, force: true, id: false do |t|
@@ -336,6 +356,10 @@ ActiveRecord::Schema.define do
     t.column :key, :string
   end
 
+  create_table :guitars, force: true do |t|
+    t.string :color
+  end
+
   create_table :inept_wizards, force: true do |t|
     t.column :name, :string, null: false
     t.column :city, :string, null: false
@@ -351,7 +375,11 @@ ActiveRecord::Schema.define do
 
   create_table :invoices, force: true do |t|
     t.integer :balance
-    t.datetime :updated_at
+    if subsecond_precision_supported?
+      t.datetime :updated_at, precision: 6
+    else
+      t.datetime :updated_at
+    end
   end
 
   create_table :iris, force: true do |t|
@@ -437,6 +465,10 @@ ActiveRecord::Schema.define do
     t.string :name
   end
 
+  create_table :mentors, force: true do |t|
+    t.string :name
+  end
+
   create_table :minivans, force: true, id: false do |t|
     t.string :minivan_id
     t.string :name
@@ -501,7 +533,11 @@ ActiveRecord::Schema.define do
 
   create_table :owners, primary_key: :owner_id, force: true do |t|
     t.string :name
-    t.column :updated_at, :datetime
+    if subsecond_precision_supported?
+      t.column :updated_at, :datetime, precision: 6
+    else
+      t.column :updated_at, :datetime
+    end
     t.column :happy_at,   :datetime
     t.string :essay_id
   end
@@ -519,10 +555,17 @@ ActiveRecord::Schema.define do
     t.column :color, :string
     t.column :parrot_sti_class, :string
     t.column :killer_id, :integer
-    t.column :created_at, :datetime
-    t.column :created_on, :datetime
-    t.column :updated_at, :datetime
-    t.column :updated_on, :datetime
+    if subsecond_precision_supported?
+      t.column :created_at, :datetime, precision: 0
+      t.column :created_on, :datetime, precision: 0
+      t.column :updated_at, :datetime, precision: 0
+      t.column :updated_on, :datetime, precision: 0
+    else
+      t.column :created_at, :datetime
+      t.column :created_on, :datetime
+      t.column :updated_at, :datetime
+      t.column :updated_on, :datetime
+    end
   end
 
   create_table :parrots_pirates, id: false, force: true do |t|
@@ -565,15 +608,24 @@ ActiveRecord::Schema.define do
   create_table :pets, primary_key: :pet_id, force: true do |t|
     t.string :name
     t.integer :owner_id, :integer
-    t.timestamps null: false
+    if subsecond_precision_supported?
+      t.timestamps null: false, precision: 6
+    else
+      t.timestamps null: false
+    end
   end
 
   create_table :pirates, force: true do |t|
     t.column :catchphrase, :string
     t.column :parrot_id, :integer
     t.integer :non_validated_parrot_id
-    t.column :created_on, :datetime
-    t.column :updated_on, :datetime
+    if subsecond_precision_supported?
+      t.column :created_on, :datetime, precision: 6
+      t.column :updated_on, :datetime, precision: 6
+    else
+      t.column :created_on, :datetime
+      t.column :updated_on, :datetime
+    end
   end
 
   create_table :posts, force: true do |t|
@@ -624,6 +676,8 @@ ActiveRecord::Schema.define do
   create_table :projects, force: true do |t|
     t.string :name
     t.string :type
+    t.integer :firm_id
+    t.integer :mentor_id
   end
 
   create_table :randomly_named_table1, force: true do |t|
@@ -670,7 +724,10 @@ ActiveRecord::Schema.define do
   create_table :ships, force: true do |t|
     t.string :name
     t.integer :pirate_id
+    t.belongs_to :developer
     t.integer :update_only_pirate_id
+    # Conventionally named column for counter_cache
+    t.integer :treasures_count, default: 0
     t.datetime :created_at
     t.datetime :created_on
     t.datetime :updated_at
@@ -680,7 +737,20 @@ ActiveRecord::Schema.define do
   create_table :ship_parts, force: true do |t|
     t.string :name
     t.integer :ship_id
-    t.datetime :updated_at
+    if subsecond_precision_supported?
+      t.datetime :updated_at, precision: 6
+    else
+      t.datetime :updated_at
+    end
+  end
+
+  create_table :prisoners, force: true do |t|
+    t.belongs_to :ship
+  end
+
+  create_table :shop_accounts, force: true do |t|
+    t.references :customer
+    t.references :customer_carrier
   end
 
   create_table :speedometers, force: true, id: false do |t|
@@ -741,7 +811,7 @@ ActiveRecord::Schema.define do
     t.string   :title, limit: 250
     t.string   :author_name
     t.string   :author_email_address
-    if mysql_56?
+    if subsecond_precision_supported?
       t.datetime :written_on, precision: 6
     else
       t.datetime :written_on
@@ -764,7 +834,11 @@ ActiveRecord::Schema.define do
     t.string   :parent_title
     t.string   :type
     t.string   :group
-    t.timestamps null: true
+    if subsecond_precision_supported?
+      t.timestamps null: true, precision: 6
+    else
+      t.timestamps null: true
+    end
   end
 
   create_table :toys, primary_key: :toy_id, force: true do |t|
@@ -787,6 +861,11 @@ ActiveRecord::Schema.define do
     t.column :looter_id, :integer
     t.column :looter_type, :string
     t.belongs_to :ship
+  end
+
+  create_table :tuning_pegs, force: true do |t|
+    t.integer :guitar_id
+    t.float :pitch
   end
 
   create_table :tyres, force: true do |t|
@@ -872,6 +951,17 @@ ActiveRecord::Schema.define do
     t.string 'from'
   end
 
+  create_table :nodes, force: true do |t|
+    t.integer :tree_id
+    t.integer :parent_id
+    t.string :name
+    t.datetime :updated_at
+  end
+  create_table :trees, force: true do |t|
+    t.string :name
+    t.datetime :updated_at
+  end
+
   create_table :hotels, force: true do |t|
   end
   create_table :departments, force: true do |t|
@@ -917,6 +1007,11 @@ ActiveRecord::Schema.define do
   create_table :users, force: true do |t|
     t.string :token
     t.string :auth_token
+    t.string :conditional_token
+  end
+
+  create_table :test_with_keyword_column_name, force: true do |t|
+    t.string :desc
   end
 end
 
@@ -927,4 +1022,13 @@ end
 
 College.connection.create_table :colleges, force: true do |t|
   t.column :name, :string, null: false
+end
+
+Professor.connection.create_table :professors, force: true do |t|
+  t.column :name, :string, null: false
+end
+
+Professor.connection.create_table :courses_professors, id: false, force: true do |t|
+  t.references :course
+  t.references :professor
 end

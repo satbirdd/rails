@@ -87,7 +87,7 @@ module ActiveModel
         validates_with BlockValidator, _merge_attributes(attr_names), &block
       end
 
-      VALID_OPTIONS_FOR_VALIDATE = [:on, :if, :unless, :prepend].freeze
+      VALID_OPTIONS_FOR_VALIDATE = [:on, :if, :unless, :prepend].freeze # :nodoc:
 
       # Adds a validation method or block to the class. This is useful when
       # overriding the +validate+ instance method becomes too unwieldy and
@@ -129,6 +129,9 @@ module ActiveModel
       #     end
       #   end
       #
+      # Note that the return value of validation methods is not relevant.
+      # It's not possible to halt the validate callback chain.
+      #
       # Options:
       # * <tt>:on</tt> - Specifies the contexts where this validation is active.
       #   Runs in all validation contexts by default (nil). You can pass a symbol
@@ -159,7 +162,7 @@ module ActiveModel
           options = options.dup
           options[:if] = Array(options[:if])
           options[:if].unshift ->(o) {
-            Array(options[:on]).include?(o.validation_context)
+            !(Array(options[:on]) & Array(o.validation_context)).empty?
           }
         end
 
@@ -401,7 +404,7 @@ module ActiveModel
   protected
 
     def run_validations! #:nodoc:
-      run_callbacks :validate
+      _run_validate_callbacks
       errors.empty?
     end
 

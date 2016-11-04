@@ -47,6 +47,14 @@ module ActiveSupport
     # Formats a +number+ into a currency string (e.g., $13.65). You
     # can customize the format in the +options+ hash.
     #
+    # The currency unit and number formatting of the current locale will be used
+    # unless otherwise specified in the provided options. No currency conversion
+    # is performed. If the user is given a way to change their locale, they will
+    # also be able to change the relative value of the currency displayed with
+    # this helper. If your application will ever support multiple locales, you
+    # may want to specify a constant <tt>:locale</tt> option or consider
+    # using a library capable of currency conversion.
+    #
     # ==== Options
     #
     # * <tt>:locale</tt> - Sets the locale to be used for formatting
@@ -115,10 +123,10 @@ module ActiveSupport
     #   number_to_percentage(100, precision: 0)                    # => 100%
     #   number_to_percentage(1000, delimiter: '.', separator: ',') # => 1.000,000%
     #   number_to_percentage(302.24398923423, precision: 5)        # => 302.24399%
-    #   number_to_percentage(1000, locale: :fr)                    # => 1 000,000%
-    #   number_to_percentage:(1000, precision: nil)                # => 1000%
+    #   number_to_percentage(1000, locale: :fr)                    # => 1000,000%
+    #   number_to_percentage(1000, precision: nil)                 # => 1000%
     #   number_to_percentage('98a')                                # => 98a%
-    #   number_to_percentage(100, format: '%n  %')                 # => 100  %
+    #   number_to_percentage(100, format: '%n  %')                 # => 100.000  %
     def number_to_percentage(number, options = {})
       NumberToPercentageConverter.convert(number, options)
     end
@@ -135,6 +143,9 @@ module ActiveSupport
     #   to ",").
     # * <tt>:separator</tt> - Sets the separator between the
     #   fractional and integer digits (defaults to ".").
+    # * <tt>:delimiter_pattern</tt> - Sets a custom regular expression used for
+    #   deriving the placement of delimiter. Helpful when using currency formats
+    #   like INR.
     #
     # ==== Examples
     #
@@ -147,7 +158,10 @@ module ActiveSupport
     #   number_to_delimited(12345678.05, locale: :fr)    # => 12 345 678,05
     #   number_to_delimited('112a')                      # => 112a
     #   number_to_delimited(98765432.98, delimiter: ' ', separator: ',')
-    #   # => 98 765 432,98
+    #                                                    # => 98 765 432,98
+    #   number_to_delimited("123456.78",
+    #     delimiter_pattern: /(\d+?)(?=(\d\d)+(\d)(?!\d))/)
+    #                                                    # => 1,23,456.78
     def number_to_delimited(number, options = {})
       NumberToDelimitedConverter.convert(number, options)
     end
@@ -220,8 +234,6 @@ module ActiveSupport
     # * <tt>:strip_insignificant_zeros</tt> - If +true+ removes
     #   insignificant zeros after the decimal separator (defaults to
     #   +true+)
-    # * <tt>:prefix</tt> - If +:si+ formats the number using the SI
-    #   prefix (defaults to :binary)
     #
     # ==== Examples
     #
@@ -231,6 +243,8 @@ module ActiveSupport
     #   number_to_human_size(1234567)                                # => 1.18 MB
     #   number_to_human_size(1234567890)                             # => 1.15 GB
     #   number_to_human_size(1234567890123)                          # => 1.12 TB
+    #   number_to_human_size(1234567890123456)                       # => 1.1 PB
+    #   number_to_human_size(1234567890123456789)                    # => 1.07 EB
     #   number_to_human_size(1234567, precision: 2)                  # => 1.2 MB
     #   number_to_human_size(483989, precision: 2)                   # => 470 KB
     #   number_to_human_size(1234567, precision: 2, separator: ',')  # => 1,2 MB

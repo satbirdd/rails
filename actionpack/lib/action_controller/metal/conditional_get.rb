@@ -4,7 +4,6 @@ module ActionController
   module ConditionalGet
     extend ActiveSupport::Concern
 
-    include RackDelegation
     include Head
 
     included do
@@ -40,7 +39,7 @@ module ActionController
     # * <tt>:etag</tt>.
     # * <tt>:last_modified</tt>.
     # * <tt>:public</tt> By default the Cache-Control header is private, set this to
-    #   +true+ if you want your application to be cachable by other devices (proxy caches).
+    #   +true+ if you want your application to be cacheable by other devices (proxy caches).
     # * <tt>:template</tt> By default, the template digest for the current
     #   controller/action is included in ETags. If the action renders a
     #   different template, you can include its digest instead. If the action
@@ -67,7 +66,7 @@ module ActionController
     #
     # You can also pass an object that responds to +maximum+, such as a
     # collection of active records. In this case +last_modified+ will be set by
-    # calling +maximum(:updated_at)+ on the collection (the timestamp of the
+    # calling <tt>maximum(:updated_at)</tt> on the collection (the timestamp of the
     # most recently updated record) and the +etag+ by passing the object itself.
     #
     #   def index
@@ -111,7 +110,7 @@ module ActionController
     # * <tt>:etag</tt>.
     # * <tt>:last_modified</tt>.
     # * <tt>:public</tt> By default the Cache-Control header is private, set this to
-    #   +true+ if you want your application to be cachable by other devices (proxy caches).
+    #   +true+ if you want your application to be cacheable by other devices (proxy caches).
     # * <tt>:template</tt> By default, the template digest for the current
     #   controller/action is included in ETags. If the action renders a
     #   different template, you can include its digest instead. If the action
@@ -229,7 +228,7 @@ module ActionController
       expires_in 100.years, public: public
 
       yield if stale?(etag: "#{version}-#{request.fullpath}",
-                      last_modified: Time.parse('2011-01-01').utc,
+                      last_modified: Time.new(2011, 1, 1).utc,
                       public: public)
     end
 

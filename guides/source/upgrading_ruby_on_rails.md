@@ -53,29 +53,59 @@ Don't forget to review the difference, to see if there were any unexpected chang
 Upgrading from Rails 4.2 to Rails 5.0
 -------------------------------------
 
-### Halting callback chains by returning `false`
+### Ruby 2.2.2+
 
-In Rails 4.2, when a 'before' callback returns `false` in ActiveRecord,
-ActiveModel and ActiveModel::Validations, then the entire callback chain
-is halted. In other words, successive 'before' callbacks are not executed,
-and neither is the action wrapped in callbacks.
+ToDo...
 
-In Rails 5.0, returning `false` in a callback will not have this side effect
-of halting the callback chain. Instead, callback chains must be explicitly
-halted by calling `throw(:abort)`.
+### Ruby 2.2.2+
 
-When you upgrade from Rails 4.2 to Rails 5.0, returning `false` in a callback
-will still halt the callback chain, but you will receive a deprecation warning
-about this upcoming change.
+ToDo...
+
+### Active Record models now inherit from ApplicationRecord by default
+
+In Rails 4.2 an Active Record model inherits from `ActiveRecord::Base`. In Rails 5.0,
+all models inherit from `ApplicationRecord`.
+
+`ApplicationRecord` is a new superclass for all app models, analogous to app
+controllers subclassing `ApplicationController` instead of
+`ActionController::Base`. This gives apps a single spot to configure app-wide
+model behavior.
+
+When upgrading from Rails 4.2 to Rails 5.0 you need to create an
+`application_record.rb` file in `app/models/` and add the following content:
+
+```
+class ApplicationRecord < ActiveRecord::Base
+  self.abstract_class = true
+end
+```
+
+### Halting callback chains via `throw(:abort)`
+
+In Rails 4.2, when a 'before' callback returns `false` in Active Record
+and Active Model, then the entire callback chain is halted. In other words,
+successive 'before' callbacks are not executed, and neither is the action wrapped
+in callbacks.
+
+In Rails 5.0, returning `false` in an Active Record or Active Model callback
+will not have this side effect of halting the callback chain. Instead, callback
+chains must be explicitly halted by calling `throw(:abort)`.
+
+When you upgrade from Rails 4.2 to Rails 5.0, returning `false` in those kind of
+callbacks will still halt the callback chain, but you will receive a deprecation
+warning about this upcoming change.
 
 When you are ready, you can opt into the new behavior and remove the deprecation
 warning by adding the following configuration to your `config/application.rb`:
 
-    config.active_support.halt_callback_chains_on_return_false = false
+    ActiveSupport.halt_callback_chains_on_return_false = false
+
+Note that this option will not affect Active Support callbacks since they never
+halted the chain when any value was returned.
 
 See [#17227](https://github.com/rails/rails/pull/17227) for more details.
 
-### ActiveJob jobs now inherent from ApplicationJob by default
+### ActiveJob jobs now inherit from ApplicationJob by default
 
 In Rails 4.2 an ActiveJob inherits from `ActiveJob::Base`. In Rails 5.0 this
 behavior has changed to now inherit from `ApplicationJob`.
@@ -314,11 +344,11 @@ Upgrading from Rails 4.0 to Rails 4.1
 
 ### CSRF protection from remote `<script>` tags
 
-Or, "whaaat my tests are failing!!!?"
+Or, "whaaat my tests are failing!!!?" or "my `<script>` widget is busted!!"
 
 Cross-site request forgery (CSRF) protection now covers GET requests with
-JavaScript responses, too. This prevents a third-party site from referencing
-your JavaScript URL and attempting to run it to extract sensitive data.
+JavaScript responses, too. This prevents a third-party site from remotely
+referencing your JavaScript with a `<script>` tag to extract sensitive data.
 
 This means that your functional and integration tests that use
 
@@ -334,8 +364,9 @@ xhr :get, :index, format: :js
 
 to explicitly test an `XmlHttpRequest`.
 
-If you really mean to load JavaScript from remote `<script>` tags, skip CSRF
-protection on that action.
+Note: Your own `<script>` tags are treated as cross-origin and blocked by
+default, too. If you really mean to load JavaScript from `<script>` tags,
+you must now explicitly skip CSRF protection on those actions.
 
 ### Spring
 
@@ -460,7 +491,7 @@ If your application currently depend on MultiJSON directly, you have a few optio
 
 WARNING: Do not simply replace `MultiJson.dump` and `MultiJson.load` with
 `JSON.dump` and `JSON.load`. These JSON gem APIs are meant for serializing and
-deserializing arbitrary Ruby objects and are generally [unsafe](http://www.ruby-doc.org/stdlib-2.0.0/libdoc/json/rdoc/JSON.html#method-i-load).
+deserializing arbitrary Ruby objects and are generally [unsafe](http://www.ruby-doc.org/stdlib-2.2.2/libdoc/json/rdoc/JSON.html#method-i-load).
 
 #### JSON gem compatibility
 
@@ -883,6 +914,20 @@ this gem such as `whitelist_attributes` or `mass_assignment_sanitizer` options.
 
 * To re-enable the old finders, you can use the [activerecord-deprecated_finders gem](https://github.com/rails/activerecord-deprecated_finders).
 
+* Rails 4.0 has changed to default join table for `has_and_belongs_to_many` relations to strip the common prefix off the second table name. Any existing `has_and_belongs_to_many` relationship between models with a common prefix must be specified with the `join_table` option. For example:
+
+```ruby
+CatalogCategory < ActiveRecord::Base
+  has_and_belongs_to_many :catalog_products, join_table: 'catalog_categories_catalog_products'
+end
+
+CatalogProduct < ActiveRecord::Base
+  has_and_belongs_to_many :catalog_categories, join_table: 'catalog_categories_catalog_products'
+end
+```
+
+* Note that the prefix takes scopes into account as well, so relations between `Catalog::Category` and `Catalog::Product` or `Catalog::Category` and `CatalogProduct` need to be updated similarly.
+
 ### Active Resource
 
 Rails 4.0 extracted Active Resource to its own gem. If you still need the feature you can add the [Active Resource gem](https://github.com/rails/activeresource) in your Gemfile.
@@ -912,7 +957,7 @@ Rails 4.0 extracted Active Resource to its own gem. If you still need the featur
 
 Please note that you should wait to set `secret_key_base` until you have 100% of your userbase on Rails 4.x and are reasonably sure you will not need to rollback to Rails 3.x. This is because cookies signed based on the new `secret_key_base` in Rails 4.x are not backwards compatible with Rails 3.x. You are free to leave your existing `secret_token` in place, not set the new `secret_key_base`, and ignore the deprecation warnings until you are reasonably sure that your upgrade is otherwise complete.
 
-If you are relying on the ability for external applications or Javascript to be able to read your Rails app's signed session cookies (or signed cookies in general) you should not set `secret_key_base` until you have decoupled these concerns.
+If you are relying on the ability for external applications or JavaScript to be able to read your Rails app's signed session cookies (or signed cookies in general) you should not set `secret_key_base` until you have decoupled these concerns.
 
 * Rails 4.0 encrypts the contents of cookie-based sessions if `secret_key_base` has been set. Rails 3.x signed, but did not encrypt, the contents of cookie-based session. Signed cookies are "secure" in that they are verified to have been generated by your app and are tamper-proof. However, the contents can be viewed by end users, and encrypting the contents eliminates this caveat/concern without a significant performance penalty.
 
@@ -925,6 +970,8 @@ Please read [Pull Request #9978](https://github.com/rails/rails/pull/9978) for d
 * Rails 4.0 has removed Action and Page caching from Action Pack. You will need to add the `actionpack-action_caching` gem in order to use `caches_action` and the `actionpack-page_caching` to use `caches_pages` in your controllers.
 
 * Rails 4.0 has removed the XML parameters parser. You will need to add the `actionpack-xml_parser` gem if you require this feature.
+
+* Rails 4.0 changes the default `layout` lookup set using symbols or procs that return nil. To get the "no layout" behavior, return false instead of nil.
 
 * Rails 4.0 changes the default memcached client from `memcache-client` to `dalli`. To upgrade, simply add `gem 'dalli'` to your `Gemfile`.
 
@@ -1070,7 +1117,7 @@ config.active_record.auto_explain_threshold_in_seconds = 0.5
 
 ### config/environments/test.rb
 
-The `mass_assignment_sanitizer` configuration setting should also be be added to `config/environments/test.rb`:
+The `mass_assignment_sanitizer` configuration setting should also be added to `config/environments/test.rb`:
 
 ```ruby
 # Raise exception on mass assignment protection for Active Record models
@@ -1171,8 +1218,10 @@ You can help test performance with these additions to your test environment:
 
 ```ruby
 # Configure static asset server for tests with Cache-Control for performance
-config.serve_static_files = true
-config.static_cache_control = 'public, max-age=3600'
+config.public_file_server.enabled = true
+config.public_file_server.headers = {
+  'Cache-Control' => 'public, max-age=3600'
+}
 ```
 
 ### config/initializers/wrap_parameters.rb

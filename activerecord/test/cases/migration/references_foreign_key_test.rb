@@ -32,6 +32,14 @@ module ActiveRecord
         assert_equal [], @connection.foreign_keys("testings")
       end
 
+      test "foreign keys can be created in one query" do
+        assert_queries(1) do
+          @connection.create_table :testings do |t|
+            t.references :testing_parent, foreign_key: true
+          end
+        end
+      end
+
       test "options hash can be passed" do
         @connection.change_table :testing_parents do |t|
           t.integer :other_id
@@ -43,6 +51,15 @@ module ActiveRecord
 
         fk = @connection.foreign_keys("testings").find { |k| k.to_table == "testing_parents" }
         assert_equal "other_id", fk.primary_key
+      end
+
+      test "to_table option can be passed" do
+        @connection.create_table :testings do |t|
+          t.references :parent, foreign_key: { to_table: :testing_parents }
+        end
+        fks = @connection.foreign_keys("testings")
+        assert_equal([["testings", "testing_parents", "parent_id"]],
+                     fks.map {|fk| [fk.from_table, fk.to_table, fk.column] })
       end
 
       test "foreign keys cannot be added to polymorphic relations when creating the table" do
@@ -128,6 +145,26 @@ module ActiveRecord
         end
       end
     end
+  end
+end
+else
+class ReferencesWithoutForeignKeySupportTest < ActiveRecord::TestCase
+  setup do
+    @connection = ActiveRecord::Base.connection
+    @connection.create_table(:testing_parents, force: true)
+  end
+
+  teardown do
+    @connection.drop_table("testings", if_exists: true)
+    @connection.drop_table("testing_parents", if_exists: true)
+  end
+
+  test "ignores foreign keys defined with the table" do
+    @connection.create_table :testings do |t|
+      t.references :testing_parent, foreign_key: true
+    end
+
+    assert_includes @connection.data_sources, "testings"
   end
 end
 end

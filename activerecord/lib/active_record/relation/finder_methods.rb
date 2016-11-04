@@ -17,7 +17,7 @@ module ActiveRecord
     #   Person.where("administrator = 1").order("created_on DESC").find(1)
     #
     # NOTE: The returned records may not be in the same order as the ids you
-    # provide since database rows are unordered. You'd need to provide an explicit <tt>order</tt>
+    # provide since database rows are unordered. You'd need to provide an explicit QueryMethods#order
     # option if you want the results are sorted.
     #
     # ==== Find with lock
@@ -34,7 +34,7 @@ module ActiveRecord
     #     person.save!
     #   end
     #
-    # ==== Variations of +find+
+    # ==== Variations of #find
     #
     #   Person.where(name: 'Spartacus', rating: 4)
     #   # returns a chainable list (which can be empty).
@@ -46,9 +46,9 @@ module ActiveRecord
     #   # returns the first item or returns a new instance (requires you call .save to persist against the database).
     #
     #   Person.where(name: 'Spartacus', rating: 4).first_or_create
-    #   # returns the first item or creates it and returns it, available since Rails 3.2.1.
+    #   # returns the first item or creates it and returns it.
     #
-    # ==== Alternatives for +find+
+    # ==== Alternatives for #find
     #
     #   Person.where(name: 'Spartacus', rating: 4).exists?(conditions = :none)
     #   # returns a boolean indicating if any record with the given conditions exist.
@@ -57,16 +57,13 @@ module ActiveRecord
     #   # returns a chainable list of instances with only the mentioned fields.
     #
     #   Person.where(name: 'Spartacus', rating: 4).ids
-    #   # returns an Array of ids, available since Rails 3.2.1.
+    #   # returns an Array of ids.
     #
     #   Person.where(name: 'Spartacus', rating: 4).pluck(:field1, :field2)
-    #   # returns an Array of the required fields, available since Rails 3.1.
+    #   # returns an Array of the required fields.
     def find(*args)
-      if block_given?
-        to_a.find(*args) { |*block_args| yield(*block_args) }
-      else
-        find_with_ids(*args)
-      end
+      return super if block_given?
+      find_with_ids(*args)
     end
 
     # Finds the first record matching the specified conditions. There
@@ -77,18 +74,19 @@ module ActiveRecord
     #
     #   Post.find_by name: 'Spartacus', rating: 4
     #   Post.find_by "published_at < ?", 2.weeks.ago
-    def find_by(*args)
-      where(*args).take
+    def find_by(arg, *args)
+      where(arg, *args).take
     rescue RangeError
       nil
     end
 
-    # Like <tt>find_by</tt>, except that if no record is found, raises
-    # an <tt>ActiveRecord::RecordNotFound</tt> error.
-    def find_by!(*args)
-      where(*args).take!
+    # Like #find_by, except that if no record is found, raises
+    # an ActiveRecord::RecordNotFound error.
+    def find_by!(arg, *args)
+      where(arg, *args).take!
     rescue RangeError
-      raise RecordNotFound, "Couldn't find #{@klass.name} with an out of range value"
+      raise RecordNotFound.new("Couldn't find #{@klass.name} with an out of range value",
+                               @klass.name)
     end
 
     # Gives a record (or N records if a parameter is supplied) without any implied
@@ -102,8 +100,8 @@ module ActiveRecord
       limit ? limit(limit).to_a : find_take
     end
 
-    # Same as +take+ but raises <tt>ActiveRecord::RecordNotFound</tt> if no record
-    # is found. Note that <tt>take!</tt> accepts no arguments.
+    # Same as #take but raises ActiveRecord::RecordNotFound if no record
+    # is found. Note that #take! accepts no arguments.
     def take!
       take or raise RecordNotFound.new("Couldn't find #{@klass.name} with [#{arel.where_sql(@klass.arel_engine)}]")
     end
@@ -111,34 +109,22 @@ module ActiveRecord
     # Find the first record (or first N records if a parameter is supplied).
     # If no order is defined it will order by primary key.
     #
-    #   Person.first # returns the first object fetched by SELECT * FROM people
+    #   Person.first # returns the first object fetched by SELECT * FROM people ORDER BY people.id LIMIT 1
     #   Person.where(["user_name = ?", user_name]).first
     #   Person.where(["user_name = :u", { u: user_name }]).first
     #   Person.order("created_on DESC").offset(5).first
-    #   Person.first(3) # returns the first three objects fetched by SELECT * FROM people LIMIT 3
-    #
-    # ==== Rails 3
-    #
-    #   Person.first # SELECT "people".* FROM "people" LIMIT 1
-    #
-    # NOTE: Rails 3 may not order this query by the primary key and the order
-    # will depend on the database implementation. In order to ensure that behavior,
-    # use <tt>User.order(:id).first</tt> instead.
-    #
-    # ==== Rails 4
-    #
-    #   Person.first # SELECT "people".* FROM "people" ORDER BY "people"."id" ASC LIMIT 1
+    #   Person.first(3) # returns the first three objects fetched by SELECT * FROM people ORDER BY people.id LIMIT 3
     #
     def first(limit = nil)
       if limit
-        find_nth_with_limit(offset_index, limit)
+        find_nth_with_limit_and_offset(0, limit, offset: offset_index)
       else
-        find_nth(0, offset_index)
+        find_nth 0
       end
     end
 
-    # Same as +first+ but raises <tt>ActiveRecord::RecordNotFound</tt> if no record
-    # is found. Note that <tt>first!</tt> accepts no arguments.
+    # Same as #first but raises ActiveRecord::RecordNotFound if no record
+    # is found. Note that #first! accepts no arguments.
     def first!
       find_nth! 0
     end
@@ -170,8 +156,8 @@ module ActiveRecord
       end
     end
 
-    # Same as +last+ but raises <tt>ActiveRecord::RecordNotFound</tt> if no record
-    # is found. Note that <tt>last!</tt> accepts no arguments.
+    # Same as #last but raises ActiveRecord::RecordNotFound if no record
+    # is found. Note that #last! accepts no arguments.
     def last!
       last or raise RecordNotFound.new("Couldn't find #{@klass.name} with [#{arel.where_sql(@klass.arel_engine)}]")
     end
@@ -183,10 +169,10 @@ module ActiveRecord
     #   Person.offset(3).second # returns the second object from OFFSET 3 (which is OFFSET 4)
     #   Person.where(["user_name = :u", { u: user_name }]).second
     def second
-      find_nth(1, offset_index)
+      find_nth 1
     end
 
-    # Same as +second+ but raises <tt>ActiveRecord::RecordNotFound</tt> if no record
+    # Same as #second but raises ActiveRecord::RecordNotFound if no record
     # is found.
     def second!
       find_nth! 1
@@ -199,10 +185,10 @@ module ActiveRecord
     #   Person.offset(3).third # returns the third object from OFFSET 3 (which is OFFSET 5)
     #   Person.where(["user_name = :u", { u: user_name }]).third
     def third
-      find_nth(2, offset_index)
+      find_nth 2
     end
 
-    # Same as +third+ but raises <tt>ActiveRecord::RecordNotFound</tt> if no record
+    # Same as #third but raises ActiveRecord::RecordNotFound if no record
     # is found.
     def third!
       find_nth! 2
@@ -215,10 +201,10 @@ module ActiveRecord
     #   Person.offset(3).fourth # returns the fourth object from OFFSET 3 (which is OFFSET 6)
     #   Person.where(["user_name = :u", { u: user_name }]).fourth
     def fourth
-      find_nth(3, offset_index)
+      find_nth 3
     end
 
-    # Same as +fourth+ but raises <tt>ActiveRecord::RecordNotFound</tt> if no record
+    # Same as #fourth but raises ActiveRecord::RecordNotFound if no record
     # is found.
     def fourth!
       find_nth! 3
@@ -231,10 +217,10 @@ module ActiveRecord
     #   Person.offset(3).fifth # returns the fifth object from OFFSET 3 (which is OFFSET 7)
     #   Person.where(["user_name = :u", { u: user_name }]).fifth
     def fifth
-      find_nth(4, offset_index)
+      find_nth 4
     end
 
-    # Same as +fifth+ but raises <tt>ActiveRecord::RecordNotFound</tt> if no record
+    # Same as #fifth but raises ActiveRecord::RecordNotFound if no record
     # is found.
     def fifth!
       find_nth! 4
@@ -247,17 +233,17 @@ module ActiveRecord
     #   Person.offset(3).forty_two # returns the forty-second object from OFFSET 3 (which is OFFSET 44)
     #   Person.where(["user_name = :u", { u: user_name }]).forty_two
     def forty_two
-      find_nth(41, offset_index)
+      find_nth 41
     end
 
-    # Same as +forty_two+ but raises <tt>ActiveRecord::RecordNotFound</tt> if no record
+    # Same as #forty_two but raises ActiveRecord::RecordNotFound if no record
     # is found.
     def forty_two!
       find_nth! 41
     end
 
-    # Returns +true+ if a record exists in the table that matches the +id+ or
-    # conditions given, or +false+ otherwise. The argument can take six forms:
+    # Returns true if a record exists in the table that matches the +id+ or
+    # conditions given, or false otherwise. The argument can take six forms:
     #
     # * Integer - Finds the record with this primary key.
     # * String - Finds the record with a primary key corresponding to this
@@ -270,7 +256,7 @@ module ActiveRecord
     # * No args - Returns +false+ if the table is empty, +true+ otherwise.
     #
     # For more information about specifying conditions as a hash or array,
-    # see the Conditions section in the introduction to <tt>ActiveRecord::Base</tt>.
+    # see the Conditions section in the introduction to ActiveRecord::Base.
     #
     # Note: You can't pass in a condition as a string (like <tt>name =
     # 'Jamie'</tt>), since it would be sanitized and then queried against
@@ -312,7 +298,7 @@ module ActiveRecord
     end
 
     # This method is called whenever no records are found with either a single
-    # id or multiple ids and raises a +ActiveRecord::RecordNotFound+ exception.
+    # id or multiple ids and raises a ActiveRecord::RecordNotFound exception.
     #
     # The error message is different depending on whether a single id or
     # multiple ids are provided. If multiple ids are provided, then the number
@@ -456,6 +442,8 @@ module ActiveRecord
     end
 
     def find_some(ids)
+      return find_some_ordered(ids) unless order_values.present?
+
       result = where(primary_key => ids).to_a
 
       expected_size =
@@ -477,6 +465,21 @@ module ActiveRecord
       end
     end
 
+    def find_some_ordered(ids)
+      ids = ids.slice(offset_value || 0, limit_value || ids.size) || []
+
+      result = except(:limit, :offset).where(primary_key => ids).to_a
+
+      if result.size == ids.size
+        pk_type = @klass.type_for_attribute(primary_key)
+
+        records_by_id = result.index_by(&:id)
+        ids.map { |id| records_by_id.fetch(pk_type.cast(id)) }
+      else
+        raise_record_not_found_exception!(ids, result.size, ids.size)
+      end
+    end
+
     def find_take
       if loaded?
         @records.first
@@ -485,27 +488,39 @@ module ActiveRecord
       end
     end
 
-    def find_nth(index, offset)
+    def find_nth(index, offset = nil)
       if loaded?
         @records[index]
       else
-        offset += index
-        @offsets[offset] ||= find_nth_with_limit(offset, 1).first
+        # TODO: once the offset argument is removed we rely on offset_index
+        # within find_nth_with_limit, rather than pass it in via
+        # find_nth_with_limit_and_offset
+        if offset
+          ActiveSupport::Deprecation.warn(<<-MSG.squish)
+            Passing an offset argument to find_nth is deprecated,
+            please use Relation#offset instead.
+          MSG
+        else
+          offset = offset_index
+        end
+        @offsets[offset + index] ||= find_nth_with_limit_and_offset(index, 1, offset: offset).first
       end
     end
 
     def find_nth!(index)
-      find_nth(index, offset_index) or raise RecordNotFound.new("Couldn't find #{@klass.name} with [#{arel.where_sql(@klass.arel_engine)}]")
+      find_nth(index) or raise RecordNotFound.new("Couldn't find #{@klass.name} with [#{arel.where_sql(@klass.arel_engine)}]")
     end
 
-    def find_nth_with_limit(offset, limit)
+    def find_nth_with_limit(index, limit)
+      # TODO: once the offset argument is removed from find_nth,
+      # find_nth_with_limit_and_offset can be merged into this method
       relation = if order_values.empty? && primary_key
                    order(arel_table[primary_key].asc)
                  else
                    self
                  end
 
-      relation = relation.offset(offset) unless offset.zero?
+      relation = relation.offset(index) unless index.zero?
       relation.limit(limit).to_a
     end
 
@@ -519,6 +534,17 @@ module ActiveRecord
           else
             reverse_order.limit(1).to_a.first
           end
+      end
+    end
+
+    private
+
+    def find_nth_with_limit_and_offset(index, limit, offset:) # :nodoc:
+      if loaded?
+        @records[index, limit]
+      else
+        index += offset
+        find_nth_with_limit(index, limit)
       end
     end
   end

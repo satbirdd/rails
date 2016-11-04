@@ -103,32 +103,6 @@ In most cases, the `ActionController::Base#render` method does the heavy lifting
 
 TIP: If you want to see the exact results of a call to `render` without needing to inspect it in a browser, you can call `render_to_string`. This method takes exactly the same options as `render`, but it returns a string instead of sending a response back to the browser.
 
-#### Rendering Nothing
-
-Perhaps the simplest thing you can do with `render` is to render nothing at all:
-
-```ruby
-render nothing: true
-```
-
-If you look at the response for this using cURL, you will see the following:
-
-```bash
-$ curl -i 127.0.0.1:3000/books
-HTTP/1.1 200 OK
-Connection: close
-Date: Sun, 24 Jan 2010 09:25:18 GMT
-Transfer-Encoding: chunked
-Content-Type: */*; charset=utf-8
-X-Runtime: 0.014297
-Set-Cookie: _blog_session=...snip...; path=/; HttpOnly
-Cache-Control: no-cache
-```
-
-We see there is an empty response (no data after the `Cache-Control` line), but the request was successful because Rails has set the response to 200 OK. You can set the `:status` option on render to change this response. Rendering nothing can be useful for Ajax requests where all you want to send back to the browser is an acknowledgment that the request was completed.
-
-TIP: You should probably be using the `head` method, discussed later in this guide, instead of `render :nothing`. This provides additional flexibility and makes it explicit that you're only generating HTTP headers.
-
 #### Rendering an Action's View
 
 If you want to render the view that corresponds to a different template within the same controller, you can use `render` with the name of the view:
@@ -306,7 +280,7 @@ render body: "raw"
 ```
 
 TIP: This option should be used only if you don't care about the content type of
-the response. Using `:plain` or `:html` might be more appropriate in most of the
+the response. Using `:plain` or `:html` might be more appropriate most of the
 time.
 
 NOTE: Unless overridden, your response returned from this render option will be
@@ -386,7 +360,6 @@ Rails understands both numeric status codes and the corresponding symbols shown 
 |                     | 303              | :see_other                       |
 |                     | 304              | :not_modified                    |
 |                     | 305              | :use_proxy                       |
-|                     | 306              | :reserved                        |
 |                     | 307              | :temporary_redirect              |
 |                     | 308              | :permanent_redirect              |
 | **Client Error**    | 400              | :bad_request                     |
@@ -402,10 +375,10 @@ Rails understands both numeric status codes and the corresponding symbols shown 
 |                     | 410              | :gone                            |
 |                     | 411              | :length_required                 |
 |                     | 412              | :precondition_failed             |
-|                     | 413              | :request_entity_too_large        |
-|                     | 414              | :request_uri_too_long            |
+|                     | 413              | :payload_too_large               |
+|                     | 414              | :uri_too_long                    |
 |                     | 415              | :unsupported_media_type          |
-|                     | 416              | :requested_range_not_satisfiable |
+|                     | 416              | :range_not_satisfiable           |
 |                     | 417              | :expectation_failed              |
 |                     | 422              | :unprocessable_entity            |
 |                     | 423              | :locked                          |
@@ -649,10 +622,13 @@ Another way to handle returning responses to an HTTP request is with `redirect_t
 redirect_to photos_url
 ```
 
-You can use `redirect_to` with any arguments that you could use with `link_to` or `url_for`. There's also a special redirect that sends the user back to the page they just came from:
+You can use `redirect_back` to return the user to the page they just came from.
+This location is pulled from the `HTTP_REFERER` header which is not guaranteed
+to be set by the browser, so you must provide the `fallback_location`
+to use in this case.
 
 ```ruby
-redirect_to :back
+redirect_back(fallback_location: root_path)
 ```
 
 #### Getting a Different Redirect Status Code
@@ -808,7 +784,7 @@ The `javascript_include_tag` helper returns an HTML `script` tag for each source
 
 If you are using Rails with the [Asset Pipeline](asset_pipeline.html) enabled, this helper will generate a link to `/assets/javascripts/` rather than `public/javascripts` which was used in earlier versions of Rails. This link is then served by the asset pipeline.
 
-A JavaScript file within a Rails application or Rails engine goes in one of three locations: `app/assets`, `lib/assets` or `vendor/assets`. These locations are explained in detail in the [Asset Organization section in the Asset Pipeline Guide](asset_pipeline.html#asset-organization)
+A JavaScript file within a Rails application or Rails engine goes in one of three locations: `app/assets`, `lib/assets` or `vendor/assets`. These locations are explained in detail in the [Asset Organization section in the Asset Pipeline Guide](asset_pipeline.html#asset-organization).
 
 You can specify a full path relative to the document root, or a URL, if you prefer. For example, to link to a JavaScript file that is inside a directory called `javascripts` inside of one of `app/assets`, `lib/assets` or `vendor/assets`, you would do this:
 
@@ -1181,14 +1157,12 @@ To pass a local variable to a partial in only specific cases use the `local_assi
 * `_articles.html.erb`
 
   ```erb
-  <%= content_tag_for :article, article do |article| %>
-    <h2><%= article.title %></h2>
+  <h2><%= article.title %></h2>
 
-    <% if local_assigns[:full] %>
-      <%= simple_format article.body %>
-    <% else %>
-      <%= truncate article.body %>
-    <% end %>
+  <% if local_assigns[:full] %>
+    <%= simple_format article.body %>
+  <% else %>
+    <%= truncate article.body %>
   <% end %>
   ```
 

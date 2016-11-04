@@ -26,6 +26,10 @@ module ActiveModel
   #
   #     define_attribute_methods :name
   #
+  #     def initialize(name)
+  #       @name = name
+  #     end
+  #
   #     def name
   #       @name
   #     end
@@ -54,7 +58,7 @@ module ActiveModel
   #
   # A newly instantiated +Person+ object is unchanged:
   #
-  #   person = Person.new
+  #   person = Person.new("Uncle Bob")
   #   person.changed? # => false
   #
   # Change the name:
@@ -76,9 +80,11 @@ module ActiveModel
   #
   # Reset the changes:
   #
-  #   person.previous_changes # => {"name" => ["Uncle Bob", "Bill"]}
+  #   person.previous_changes         # => {"name" => ["Uncle Bob", "Bill"]}
+  #   person.name_previously_changed? # => true
+  #   person.name_previous_change     # => ["Uncle Bob", "Bill"]
   #   person.reload!
-  #   person.previous_changes # => {}
+  #   person.previous_changes         # => {}
   #
   # Rollback the changes:
   #
@@ -100,10 +106,10 @@ module ActiveModel
   #   person.changes # => {"name" => ["Bill", "Bob"]}
   #
   # If an attribute is modified in-place then make use of
-  # +[attribute_name]_will_change!+ to mark that the attribute is changing.
+  # <tt>[attribute_name]_will_change!</tt> to mark that the attribute is changing.
   # Otherwise \Active \Model can't track changes to in-place attributes. Note
   # that Active Record can detect in-place modifications automatically. You do
-  # not need to call +[attribute_name]_will_change!+ on Active Record models.
+  # not need to call <tt>[attribute_name]_will_change!</tt> on Active Record models.
   #
   #   person.name_will_change!
   #   person.name_change # => ["Bill", "Bill"]
@@ -115,6 +121,7 @@ module ActiveModel
 
     included do
       attribute_method_suffix '_changed?', '_change', '_will_change!', '_was'
+      attribute_method_suffix '_previously_changed?', '_previous_change'
       attribute_method_affix prefix: 'restore_', suffix: '!'
     end
 
@@ -179,6 +186,11 @@ module ActiveModel
       attribute_changed?(attr) ? changed_attributes[attr] : __send__(attr)
     end
 
+    # Handles <tt>*_previously_changed?</tt> for +method_missing+.
+    def attribute_previously_changed?(attr, options = {}) #:nodoc:
+      previous_changes_include?(attr)
+    end
+
     # Restore all previous data of the provided attributes.
     def restore_attributes(attributes = changed)
       attributes.each { |attr| restore_attribute! attr }
@@ -191,6 +203,12 @@ module ActiveModel
         attributes_changed_by_setter.include?(attr_name)
       end
       alias attribute_changed_by_setter? changes_include?
+
+      # Returns +true+ if attr_name were changed before the model was saved,
+      # +false+ otherwise.
+      def previous_changes_include?(attr_name)
+        previous_changes.include?(attr_name)
+      end
 
       # Removes current changes and makes them accessible through +previous_changes+.
       def changes_applied # :doc:
@@ -207,6 +225,11 @@ module ActiveModel
       # Handles <tt>*_change</tt> for +method_missing+.
       def attribute_change(attr)
         [changed_attributes[attr], __send__(attr)] if attribute_changed?(attr)
+      end
+
+      # Handles <tt>*_previous_change</tt> for +method_missing+.
+      def attribute_previous_change(attr)
+        previous_changes[attr] if attribute_previously_changed?(attr)
       end
 
       # Handles <tt>*_will_change!</tt> for +method_missing+.

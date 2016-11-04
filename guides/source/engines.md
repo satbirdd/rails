@@ -150,7 +150,7 @@ When you include the engine into an application later on, you will do so with
 this line in the Rails application's `Gemfile`:
 
 ```ruby
-gem 'blorgh', path: "vendor/engines/blorgh"
+gem 'blorgh', path: 'engines/blorgh'
 ```
 
 Don't forget to run `bundle install` as usual. By specifying it as a gem within
@@ -238,6 +238,27 @@ application.
 NOTE: The `ApplicationController` class inside an engine is named just like a
 Rails application in order to make it easier for you to convert your
 applications into engines.
+
+NOTE: Because of the way that Ruby does constant lookup you may run into a situation
+where your engine controller is inheriting from the main application controller and
+not your engine's application controller. Ruby is able to resolve the `ApplicationController` constant, and therefore the autoloading mechanism is not triggered. See the section [When Constants Aren't Missed](autoloading_and_reloading_constants.html#when-constants-aren-t-missed) of the [Autoloading and Reloading Constants](autoloading_and_reloading_constants.html) guide for further details. The best way to prevent this from
+happening is to use `require_dependency` to ensure that the engine's application
+controller is loaded. For example:
+
+``` ruby
+# app/controllers/blorgh/articles_controller.rb:
+require_dependency "blorgh/application_controller"
+
+module Blorgh
+  class ArticlesController < ApplicationController
+    ...
+  end
+end
+```
+
+WARNING: Don't use `require` because it will break the automatic reloading of classes
+in the development environment - using `require_dependency` ensures that classes are
+loaded and unloaded in the correct manner.
 
 Lastly, the `app/views` directory contains a `layouts` folder, which contains a
 file at `blorgh/application.html.erb`. This file allows you to specify a layout
@@ -487,7 +508,7 @@ Turning the model into this:
 
 ```ruby
 module Blorgh
-  class Article < ActiveRecord::Base
+  class Article < ApplicationRecord
     has_many :comments
   end
 end
@@ -582,7 +603,7 @@ the comments, however, is not quite right yet. If you were to create a comment
 right now, you would see this error:
 
 ```
-Missing partial blorgh/comments/comment with {:handlers=>[:erb, :builder],
+Missing partial blorgh/comments/_comment with {:handlers=>[:erb, :builder],
 :formats=>[:html], :locale=>[:en, :en]}. Searched in:   *
 "/Users/ryan/Sites/side_projects/blorgh/test/dummy/app/views"   *
 "/Users/ryan/Sites/side_projects/blorgh/app/views"
@@ -591,7 +612,7 @@ Missing partial blorgh/comments/comment with {:handlers=>[:erb, :builder],
 The engine is unable to find the partial required for rendering the comments.
 Rails looks first in the application's (`test/dummy`) `app/views` directory and
 then in the engine's `app/views` directory. When it can't find it, it will throw
-this error. The engine knows to look for `blorgh/comments/comment` because the
+this error. The engine knows to look for `blorgh/comments/_comment` because the
 model object it is receiving is from the `Blorgh::Comment` class.
 
 This partial will be responsible for rendering just the comment text, for now.
@@ -639,7 +660,7 @@ However, because you are developing the `blorgh` engine on your local machine,
 you will need to specify the `:path` option in your `Gemfile`:
 
 ```ruby
-gem 'blorgh', path: "/path/to/blorgh"
+gem 'blorgh', path: 'engines/blorgh'
 ```
 
 Then run `bundle` to install the gem.
@@ -670,7 +691,7 @@ pre-defined path which may be customizable.
 The engine contains migrations for the `blorgh_articles` and `blorgh_comments`
 table which need to be created in the application's database so that the
 engine's models can query them correctly. To copy these migrations into the
-application use this command:
+application run the following command from the `test/dummy` directory of your Rails engine:
 
 ```bash
 $ rake blorgh:install:migrations
@@ -689,8 +710,8 @@ haven't been copied over already. The first run for this command will output
 something such as this:
 
 ```bash
-Copied migration [timestamp_1]_create_blorgh_articles.rb from blorgh
-Copied migration [timestamp_2]_create_blorgh_comments.rb from blorgh
+Copied migration [timestamp_1]_create_blorgh_articles.blorgh.rb from blorgh
+Copied migration [timestamp_2]_create_blorgh_comments.blorgh.rb from blorgh
 ```
 
 The first timestamp (`[timestamp_1]`) will be the current time, and the second
@@ -822,9 +843,9 @@ Notice that only _one_ migration was copied over here. This is because the first
 two migrations were copied over the first time this command was run.
 
 ```
-NOTE Migration [timestamp]_create_blorgh_articles.rb from blorgh has been skipped. Migration with the same name already exists. 
-NOTE Migration [timestamp]_create_blorgh_comments.rb from blorgh has been skipped. Migration with the same name already exists. 
-Copied migration [timestamp]_add_author_id_to_blorgh_articles.rb from blorgh
+NOTE Migration [timestamp]_create_blorgh_articles.blorgh.rb from blorgh has been skipped. Migration with the same name already exists.
+NOTE Migration [timestamp]_create_blorgh_comments.blorgh.rb from blorgh has been skipped. Migration with the same name already exists.
+Copied migration [timestamp]_add_author_id_to_blorgh_articles.blorgh.rb from blorgh
 ```
 
 Run the migration using:
@@ -843,27 +864,9 @@ above the "Title" output inside `app/views/blorgh/articles/show.html.erb`:
 ```html+erb
 <p>
   <b>Author:</b>
-  <%= @article.author %>
+  <%= @article.author.name %>
 </p>
 ```
-
-By outputting `@article.author` using the `<%=` tag, the `to_s` method will be
-called on the object. By default, this will look quite ugly:
-
-```
-#<User:0x00000100ccb3b0>
-```
-
-This is undesirable. It would be much better to have the user's name there. To
-do this, add a `to_s` method to the `User` class within the application:
-
-```ruby
-def to_s
-  name
-end
-```
-
-Now instead of the ugly Ruby object output, the author's name will be displayed.
 
 #### Using a Controller Provided by the Application
 
@@ -1030,9 +1033,9 @@ typical `GET` to a controller in a controller's functional test like this:
 
 ```ruby
 module Blorgh
-  class FooControllerTest < ActionController::TestCase
+  class FooControllerTest < ActionDispatch::IntegrationTest
     def test_index
-      get :index
+      get foos_url
       ...
     end
   end
@@ -1046,13 +1049,13 @@ in your setup code:
 
 ```ruby
 module Blorgh
-  class FooControllerTest < ActionController::TestCase
+  class FooControllerTest < ActionDispatch::IntegrationTest
     setup do
       @routes = Engine.routes
     end
 
     def test_index
-      get :index
+      get foos_url
       ...
     end
   end
@@ -1126,7 +1129,7 @@ end
 ```ruby
 # Blorgh/app/models/article.rb
 
-class Article < ActiveRecord::Base
+class Article < ApplicationRecord
   has_many :comments
 end
 ```
@@ -1147,7 +1150,7 @@ end
 ```ruby
 # Blorgh/app/models/article.rb
 
-class Article < ActiveRecord::Base
+class Article < ApplicationRecord
   has_many :comments
   def summary
     "#{title}"
@@ -1168,7 +1171,7 @@ classes at run time allowing you to significantly modularize your code.
 ```ruby
 # MyApp/app/models/blorgh/article.rb
 
-class Blorgh::Article < ActiveRecord::Base
+class Blorgh::Article < ApplicationRecord
   include Blorgh::Concerns::Models::Article
 
   def time_since_created
@@ -1184,7 +1187,7 @@ end
 ```ruby
 # Blorgh/app/models/article.rb
 
-class Article < ActiveRecord::Base
+class Article < ApplicationRecord
   include Blorgh::Concerns::Models::Article
 end
 ```

@@ -1,7 +1,8 @@
 require 'active_support/core_ext/big_decimal/conversions'
 require 'active_support/number_helper'
+require 'active_support/core_ext/module/deprecation'
 
-class Numeric
+module ActiveSupport::NumericWithFormat
 
   # Provides options for converting numbers into formatted strings.
   # Options are provided for phone numbers, currency, percentage,
@@ -41,7 +42,7 @@ class Numeric
   #  1000.to_s(:percentage, delimiter: '.', separator: ',') # => 1.000,000%
   #  302.24398923423.to_s(:percentage, precision: 5)        # => 302.24399%
   #  1000.to_s(:percentage, locale: :fr)                    # => 1 000,000%
-  #  100.to_s(:percentage, format: '%n  %')                 # => 100  %
+  #  100.to_s(:percentage, format: '%n  %')                 # => 100.000  %
   #
   #  Delimited:
   #  12345678.to_s(:delimited)                     # => 12,345,678
@@ -75,10 +76,12 @@ class Numeric
   #  1234567.to_s(:human_size)                               # => 1.18 MB
   #  1234567890.to_s(:human_size)                            # => 1.15 GB
   #  1234567890123.to_s(:human_size)                         # => 1.12 TB
+  #  1234567890123456.to_s(:human_size)                      # => 1.1 PB
+  #  1234567890123456789.to_s(:human_size)                   # => 1.07 EB
   #  1234567.to_s(:human_size, precision: 2)                 # => 1.2 MB
   #  483989.to_s(:human_size, precision: 2)                  # => 470 KB
   #  1234567.to_s(:human_size, precision: 2, separator: ',') # => 1,2 MB
-  #  1234567890123.to_s(:human_size, precision: 5)           # => "1.1229 TB"
+  #  1234567890123.to_s(:human_size, precision: 5)           # => "1.1228 TB"
   #  524288000.to_s(:human_size, precision: 5)               # => "500 MB"
   #
   #  Human-friendly format:
@@ -97,7 +100,10 @@ class Numeric
   #  1234567.to_s(:human, precision: 1,
   #                   separator: ',',
   #                   significant: false)                   # => "1,2 Million"
-  def to_formatted_s(format = :default, options = {})
+  def to_s(*args)
+    format, options = args
+    options ||= {}
+
     case format
     when :phone
       return ActiveSupport::NumberHelper.number_to_phone(self, options)
@@ -114,32 +120,20 @@ class Numeric
     when :human_size
       return ActiveSupport::NumberHelper.number_to_human_size(self, options)
     else
-      self.to_default_s
-    end
-  end
-
-  [Fixnum, Bignum].each do |klass|
-    klass.class_eval do
-      alias_method :to_default_s, :to_s
-      def to_s(base_or_format = 10, options = nil)
-        if base_or_format.is_a?(Symbol)
-          to_formatted_s(base_or_format, options || {})
-        else
-          to_default_s(base_or_format)
-        end
-      end
-    end
-  end
-
-  Float.class_eval do
-    alias_method :to_default_s, :to_s
-    def to_s(*args)
-      if args.empty?
-        to_default_s
+      if is_a?(Float) || format.is_a?(Symbol)
+        super()
       else
-        to_formatted_s(*args)
+        super
       end
     end
   end
 
+  def to_formatted_s(*args)
+    to_s(*args)
+  end
+  deprecate to_formatted_s: :to_s
+end
+
+[Fixnum, Bignum, Float, BigDecimal].each do |klass|
+  klass.prepend(ActiveSupport::NumericWithFormat)
 end

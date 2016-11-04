@@ -88,9 +88,10 @@ module ActiveRecord
       ##
       # :singleton-method:
       # Specifies which database schemas to dump when calling db:structure:dump.
-      # If :schema_search_path (the default), it will dumps any schemas listed in schema_search_path.
-      # Use :all to always dumps all schemas regardless of the schema_search_path.
-      # A string of comma separated schemas can also be used to pass a custom list of schemas.
+      # If the value is :schema_search_path (the default), any schemas listed in
+      # schema_search_path are dumped. Use :all to dump all schemas regardless
+      # of schema_search_path, or a string of comma separated schemas for a
+      # custom list.
       mattr_accessor :dump_schemas, instance_writer: false
       self.dump_schemas = :schema_search_path
 
@@ -161,11 +162,13 @@ module ActiveRecord
         }
         record = statement.execute([id], self, connection).first
         unless record
-          raise RecordNotFound, "Couldn't find #{name} with '#{primary_key}'=#{id}"
+          raise RecordNotFound.new("Couldn't find #{name} with '#{primary_key}'=#{id}",
+                                   name, primary_key, id)
         end
         record
       rescue RangeError
-        raise RecordNotFound, "Couldn't find #{name} with an out of range value for '#{primary_key}'"
+        raise RecordNotFound.new("Couldn't find #{name} with an out of range value for '#{primary_key}'",
+                                 name, primary_key)
       end
 
       def find_by(*args) # :nodoc:
@@ -174,7 +177,7 @@ module ActiveRecord
         hash = args.first
 
         return super if hash.values.any? { |v|
-          v.nil? || Array === v || Hash === v
+          v.nil? || Array === v || Hash === v || Relation === v
         }
 
         # We can't cache Post.find_by(author: david) ...yet
@@ -190,15 +193,15 @@ module ActiveRecord
         }
         begin
           statement.execute(hash.values, self, connection).first
-        rescue TypeError => e
-          raise ActiveRecord::StatementInvalid.new(e.message, e)
+        rescue TypeError
+          raise ActiveRecord::StatementInvalid
         rescue RangeError
           nil
         end
       end
 
       def find_by!(*args) # :nodoc:
-        find_by(*args) or raise RecordNotFound.new("Couldn't find #{name}")
+        find_by(*args) or raise RecordNotFound.new("Couldn't find #{name}", name)
       end
 
       def initialize_generated_modules # :nodoc:
@@ -293,7 +296,7 @@ module ActiveRecord
     #   # Instantiates a single new object
     #   User.new(first_name: 'Jamie')
     def initialize(attributes = nil)
-      @attributes = self.class._default_attributes.dup
+      @attributes = self.class._default_attributes.deep_dup
       self.class.define_attribute_methods
 
       init_internals
@@ -302,12 +305,12 @@ module ActiveRecord
       assign_attributes(attributes) if attributes
 
       yield self if block_given?
-      run_callbacks :initialize
+      _run_initialize_callbacks
     end
 
     # Initialize an empty model object from +coder+. +coder+ should be
     # the result of previously encoding an Active Record model, using
-    # `encode_with`
+    # #encode_with.
     #
     #   class Post < ActiveRecord::Base
     #   end
@@ -329,8 +332,8 @@ module ActiveRecord
 
       self.class.define_attribute_methods
 
-      run_callbacks :find
-      run_callbacks :initialize
+      _run_find_callbacks
+      _run_initialize_callbacks
 
       self
     end
@@ -363,10 +366,10 @@ module ActiveRecord
 
     ##
     def initialize_dup(other) # :nodoc:
-      @attributes = @attributes.dup
+      @attributes = @attributes.deep_dup
       @attributes.reset(self.class.primary_key)
 
-      run_callbacks(:initialize)
+      _run_initialize_callbacks
 
       @new_record  = true
       @destroyed   = false
@@ -376,7 +379,7 @@ module ActiveRecord
 
     # Populate +coder+ with attributes about this record that should be
     # serialized. The structure of +coder+ defined in this method is
-    # guaranteed to match the structure of +coder+ passed to the +init_with+
+    # guaranteed to match the structure of +coder+ passed to the #init_with
     # method.
     #
     # Example:
@@ -474,7 +477,7 @@ module ActiveRecord
       "#<#{self.class} #{inspection}>"
     end
 
-    # Takes a PP and prettily prints this record to it, allowing you to get a nice result from `pp record`
+    # Takes a PP and prettily prints this record to it, allowing you to get a nice result from <tt>pp record</tt>
     # when pp is required.
     def pretty_print(pp)
       return super if custom_inspect_method_defined?

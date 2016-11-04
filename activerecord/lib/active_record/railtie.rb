@@ -16,11 +16,11 @@ module ActiveRecord
     config.app_generators.orm :active_record, :migration => true,
                                               :timestamps => true
 
-    config.app_middleware.insert_after "::ActionDispatch::Callbacks",
-      "ActiveRecord::QueryCache"
+    config.app_middleware.insert_after ::ActionDispatch::Callbacks,
+      ActiveRecord::QueryCache
 
-    config.app_middleware.insert_after "::ActionDispatch::Callbacks",
-      "ActiveRecord::ConnectionAdapters::ConnectionManagement"
+    config.app_middleware.insert_after ::ActionDispatch::Callbacks,
+      ActiveRecord::ConnectionAdapters::ConnectionManagement
 
     config.action_dispatch.rescue_responses.merge!(
       'ActiveRecord::RecordNotFound'   => :not_found,
@@ -57,8 +57,10 @@ module ActiveRecord
     console do |app|
       require "active_record/railties/console_sandbox" if app.sandbox?
       require "active_record/base"
-      console = ActiveSupport::Logger.new(STDERR)
-      Rails.logger.extend ActiveSupport::Logger.broadcast console
+      unless ActiveSupport::Logger.logger_outputs_to?(Rails.logger, STDERR, STDOUT)
+        console = ActiveSupport::Logger.new(STDERR)
+        Rails.logger.extend ActiveSupport::Logger.broadcast console
+      end
     end
 
     runner do
@@ -69,6 +71,7 @@ module ActiveRecord
       ActiveSupport.on_load(:active_record) do
         self.time_zone_aware_attributes = true
         self.default_timezone = :utc
+        self.time_zone_aware_types = ActiveRecord::Base.time_zone_aware_types
       end
     end
 
@@ -78,8 +81,8 @@ module ActiveRecord
 
     initializer "active_record.migration_error" do
       if config.active_record.delete(:migration_error) == :page_load
-        config.app_middleware.insert_after "::ActionDispatch::Callbacks",
-          "ActiveRecord::Migration::CheckPending"
+        config.app_middleware.insert_after ::ActionDispatch::Callbacks,
+          ActiveRecord::Migration::CheckPending
       end
     end
 
@@ -93,6 +96,7 @@ module ActiveRecord
               cache = Marshal.load File.binread filename
               if cache.version == ActiveRecord::Migrator.current_version
                 self.connection.schema_cache = cache
+                self.connection_pool.schema_cache = cache.dup
               else
                 warn "Ignoring db/schema_cache.dump because it has expired. The current schema version is #{ActiveRecord::Migrator.current_version}, but the one in the cache is #{cache.version}."
               end
@@ -120,7 +124,7 @@ module ActiveRecord
 
     # This sets the database configuration from Configuration#database_configuration
     # and then establishes the connection.
-    initializer "active_record.initialize_database" do |app|
+    initializer "active_record.initialize_database" do
       ActiveSupport.on_load(:active_record) do
         self.configurations = Rails.application.config.database_configuration
 
@@ -133,8 +137,8 @@ Oops - You have a database configured, but it doesn't exist yet!
 Here's how to get started:
 
   1. Configure your database in config/database.yml.
-  2. Run `bin/rake db:create` to create the database.
-  3. Run `bin/rake db:setup` to load your database schema.
+  2. Run `bin/rails db:create` to create the database.
+  3. Run `bin/rails db:setup` to load your database schema.
 end_warning
           raise
         end
@@ -155,8 +159,8 @@ end_warning
       ActiveSupport.on_load(:active_record) do
         ActionDispatch::Reloader.send(hook) do
           if ActiveRecord::Base.connected?
-            ActiveRecord::Base.clear_reloadable_connections!
             ActiveRecord::Base.clear_cache!
+            ActiveRecord::Base.clear_reloadable_connections!
           end
         end
       end

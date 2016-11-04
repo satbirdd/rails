@@ -15,7 +15,7 @@ After reading this guide, you will know:
 What is Action View?
 --------------------
 
-Action View and Action Controller are the two major components of Action Pack. In Rails, web requests are handled by Action Pack, which splits the work into a controller part (performing the logic) and a view part (rendering a template). Typically, Action Controller will be concerned with communicating with the database and performing CRUD actions where necessary. Action View is then responsible for compiling the response.
+In Rails, web requests are handled by [Action Controller](action_controller_overview.html) and Action View. Typically, Action Controller will be concerned with communicating with the database and performing CRUD actions where necessary. Action View is then responsible for compiling the response.
 
 Action View templates are written using embedded Ruby in tags mingled with HTML. To avoid cluttering the templates with boilerplate code, a number of helper classes provide common behavior for forms, dates, and strings. It's also easy to add new helpers to your application as it evolves.
 
@@ -147,6 +147,39 @@ xml.rss("version" => "2.0", "xmlns:dc" => "http://purl.org/dc/elements/1.1/") do
 end
 ```
 
+#### Jbuilder
+[Jbuilder](https://github.com/rails/jbuilder) is a gem that's
+maintained by the Rails team and included in the default Rails Gemfile.
+It's similar to Builder, but is used to generate JSON, instead of XML.
+
+If you don't have it, you can add the following to your Gemfile:
+
+```ruby
+gem 'jbuilder'
+```
+
+A Jbuilder object named `json` is automatically made available to templates with
+a `.jbuilder` extension.
+
+Here is a basic example:
+
+```ruby
+json.name("Alex")
+json.email("alex@example.com")
+```
+
+would produce:
+
+```json
+{
+  "name": "Alex",
+  "email: "alex@example.com"
+}
+```
+
+See the [Jbuilder documention](https://github.com/rails/jbuilder#jbuilder) for
+more examples and information.
+
 #### Template Caching
 
 By default, Rails will compile each template to a method in order to render it. When you alter a template, Rails will check the file's modification time and recompile it in development mode.
@@ -214,7 +247,8 @@ By default `ActionView::Partials::PartialRenderer` has its object in a local var
 <%= render partial: "product" %>
 ```
 
-within product we'll get `@product` in the local variable `product`, as if we had written:
+within `_product` partial we'll get `@product` in the local variable `product`,
+as if we had written:
 
 ```erb
 <%= render partial: "product", locals: { product: @product } %>
@@ -317,26 +351,6 @@ The `box` layout simply wraps the `_article` partial in a `div`:
 </div>
 ```
 
-The `_article` partial wraps the article's `body` in a `div` with the `id` of the article using the `div_for` helper:
-
-**articles/_article.html.erb**
-
-```html+erb
-<%= div_for(article) do %>
-  <p><%= article.body %></p>
-<% end %>
-```
-
-this would output the following:
-
-```html
-<div class='box'>
-  <div id='article_1'>
-    <p>Partial Layouts are cool!</p>
-  </div>
-</div>
-```
-
 Note that the partial layout has access to the local `article` variable that was passed into the `render` call. However, unlike application-wide layouts, partial layouts still have the underscore prefix.
 
 You can also render a block of code within a partial layout instead of calling `yield`. For example, if we didn't have the `_article` partial, we could do this instead:
@@ -345,9 +359,9 @@ You can also render a block of code within a partial layout instead of calling `
 
 ```html+erb
 <% render(layout: 'box', locals: { article: @article }) do %>
-  <%= div_for(article) do %>
+  <div>
     <p><%= article.body %></p>
-  <% end %>
+  </div>
 <% end %>
 ```
 
@@ -356,39 +370,34 @@ Supposing we use the same `_box` partial from above, this would produce the same
 View Paths
 ----------
 
-When rendering the view for a request, the controller needs to resolve where to find each of the directories are located.
+When rendering a response, the controller needs to resolve where the different
+views are located. By default it only looks inside the `app/views` directory.
 
-We are able to modify the order these locations are resolved by using `prepend_view_path` and `append_view_path`.
-
-This allows us to add new paths to the beginning or end of the list used to resolve these paths.
+We can add other locations and give them a certain precedence when resolving
+paths using the `prepend_view_path` and `append_view_path` methods.
 
 ### Prepend view path
 
-This can be helpful for example, when we want to prepend a different directory for subdomains.
+This can be helpful for example, when we want to put views inside a different
+directory for subdomains.
 
 We can do this by using:
 
-```prepend_view_path "app/views/#{request.subdomain}"```
-
-Then our list becomes something like:
-
-```
-[
-  ~/rails_app/app/views/<subdomain>,
-  ~/rails_app/app/views,
-  # ...
-]
+```ruby
+prepend_view_path "app/views/#{request.subdomain}"
 ```
 
-This will put the subdomain path at the beginning of the list.
+Then Action View will look first in this directory when resolving views.
 
 ### Append view path
 
 Similarly, we can append paths:
 
-```append_view_path "app/views/direct"```.
+```ruby
+append_view_path "app/views/direct"
+```
 
-This will add ```app/views/direct``` and the end of lookup paths for views.
+This will add `app/views/direct` to the end of the lookup paths.
 
 Overview of helpers provided by Action View
 -------------------------------------------
@@ -498,7 +507,7 @@ Returns a stylesheet link tag for the sources specified as arguments. If you don
 stylesheet_link_tag "application" # => <link href="/assets/application.css" media="screen" rel="stylesheet" />
 ```
 
-You can also include all styles in the stylesheet directory using :all as the source:
+You can also include all styles in the stylesheet directory using `:all` as the source:
 
 ```ruby
 stylesheet_link_tag :all
@@ -513,7 +522,7 @@ stylesheet_link_tag :all, cache: true
 
 #### stylesheet_path
 
-Computes the path to a stylesheet asset in the `app/assets/stylesheets` directory. If the source filename has no extension, .css will be appended. Full paths from the document root will be passed through. Used internally by stylesheet_link_tag to build the stylesheet path.
+Computes the path to a stylesheet asset in the `app/assets/stylesheets` directory. If the source filename has no extension, `.css` will be appended. Full paths from the document root will be passed through. Used internally by stylesheet_link_tag to build the stylesheet path.
 
 ```ruby
 stylesheet_path "application" # => /assets/application.css
@@ -557,7 +566,7 @@ end
 ```ruby
 atom_feed do |feed|
   feed.title("Articles Index")
-  feed.updated((@articles.first.created_at))
+  feed.updated(@articles.first.created_at)
 
   @articles.each do |article|
     feed.entry(article) do |entry|
@@ -590,7 +599,7 @@ This would add something like "Process data files (0.34523)" to the log, which y
 
 #### cache
 
-A method for caching fragments of a view rather than an entire action or page. This technique is useful caching pieces like menus, lists of news topics, static HTML fragments, and so on. This method takes a block that contains the content you wish to cache. See `ActionController::Caching::Fragments` for more information.
+A method for caching fragments of a view rather than an entire action or page. This technique is useful for caching pieces like menus, lists of news topics, static HTML fragments, and so on. This method takes a block that contains the content you wish to cache. See `ActionController::Caching::Fragments` for more information.
 
 ```erb
 <% cache do %>
@@ -731,7 +740,7 @@ Returns a select tag with options for each of the minutes 0 through 59 with the 
 
 ```ruby
 # Generates a select field for minutes that defaults to the minutes for the time provided.
-select_minute(Time.now + 6.hours)
+select_minute(Time.now + 10.minutes)
 ```
 
 #### select_month
@@ -749,7 +758,7 @@ Returns a select tag with options for each of the seconds 0 through 59 with the 
 
 ```ruby
 # Generates a select field for seconds that defaults to the seconds for the time provided
-select_second(Time.now + 16.minutes)
+select_second(Time.now + 16.seconds)
 ```
 
 #### select_time
@@ -814,9 +823,9 @@ third:
 
 Form helpers are designed to make working with models much easier compared to using just standard HTML elements by providing a set of methods for creating forms based on your models. This helper generates the HTML for forms, providing a method for each sort of input (e.g., text, password, select, and so on). When the form is submitted (i.e., when the user hits the submit button or form.submit is called via JavaScript), the form inputs will be bundled into the params object and passed back to the controller.
 
-There are two types of form helpers: those that specifically work with model attributes and those that don't. This helper deals with those that work with model attributes; to see an example of form helpers that don't work with model attributes, check the ActionView::Helpers::FormTagHelper documentation.
+There are two types of form helpers: those that specifically work with model attributes and those that don't. This helper deals with those that work with model attributes; to see an example of form helpers that don't work with model attributes, check the `ActionView::Helpers::FormTagHelper` documentation.
 
-The core method of this helper, form_for, gives you the ability to create a form for a model instance; for example, let's say that you have a model Person and want to create a new instance of it:
+The core method of this helper, `form_for`, gives you the ability to create a form for a model instance; for example, let's say that you have a model Person and want to create a new instance of it:
 
 ```html+erb
 # Note: a @person variable will have been created in the controller (e.g. @person = Person.new)
@@ -858,7 +867,7 @@ check_box("article", "validated")
 
 #### fields_for
 
-Creates a scope around a specific model object like form_for, but doesn't create the form tags themselves. This makes fields_for suitable for specifying additional model objects in the same form:
+Creates a scope around a specific model object like `form_for`, but doesn't create the form tags themselves. This makes `fields_for` suitable for specifying additional model objects in the same form:
 
 ```html+erb
 <%= form_for @person, url: { action: "update" } do |person_form| %>
@@ -981,11 +990,11 @@ Returns `select` and `option` tags for the collection of existing return values 
 Example object structure for use with this method:
 
 ```ruby
-class Article < ActiveRecord::Base
+class Article < ApplicationRecord
   belongs_to :author
 end
 
-class Author < ActiveRecord::Base
+class Author < ApplicationRecord
   has_many :articles
   def name_with_initial
     "#{first_name.first}. #{last_name}"
@@ -1017,11 +1026,11 @@ Returns `radio_button` tags for the collection of existing return values of `met
 Example object structure for use with this method:
 
 ```ruby
-class Article < ActiveRecord::Base
+class Article < ApplicationRecord
   belongs_to :author
 end
 
-class Author < ActiveRecord::Base
+class Author < ApplicationRecord
   has_many :articles
   def name_with_initial
     "#{first_name.first}. #{last_name}"
@@ -1053,11 +1062,11 @@ Returns `check_box` tags for the collection of existing return values of `method
 Example object structure for use with this method:
 
 ```ruby
-class Article < ActiveRecord::Base
+class Article < ApplicationRecord
   has_and_belongs_to_many :authors
 end
 
-class Author < ActiveRecord::Base
+class Author < ApplicationRecord
   has_and_belongs_to_many :articles
   def name_with_initial
     "#{first_name.first}. #{last_name}"
@@ -1083,14 +1092,6 @@ If `@article.author_ids` is [1], this would return:
 <input name="article[author_ids][]" type="hidden" value="" />
 ```
 
-#### country_options_for_select
-
-Returns a string of option tags for pretty much any country in the world.
-
-#### country_select
-
-Returns select and option tags for the given object and method, using country_options_for_select to generate the list of option tags.
-
 #### option_groups_from_collection_for_select
 
 Returns a string of `option` tags, like `options_from_collection_for_select`, but groups them by `optgroup` tags based on the object relationships of the arguments.
@@ -1098,12 +1099,12 @@ Returns a string of `option` tags, like `options_from_collection_for_select`, bu
 Example object structure for use with this method:
 
 ```ruby
-class Continent < ActiveRecord::Base
+class Continent < ApplicationRecord
   has_many :countries
   # attribs: id, name
 end
 
-class Country < ActiveRecord::Base
+class Country < ApplicationRecord
   belongs_to :continent
   # attribs: id, name, continent_id
 end
@@ -1152,7 +1153,7 @@ Returns a string of option tags that have been compiled by iterating over the `c
 # options_from_collection_for_select(collection, value_method, text_method, selected = nil)
 ```
 
-For example, imagine a loop iterating over each person in @project.people to generate an input tag:
+For example, imagine a loop iterating over each person in `@project.people` to generate an input tag:
 
 ```ruby
 options_from_collection_for_select(@project.people, "id", "name")
@@ -1177,8 +1178,8 @@ If `@article.person_id` is 1, this would become:
 <select name="article[person_id]">
   <option value=""></option>
   <option value="1" selected="selected">David</option>
-  <option value="2">Sam</option>
-  <option value="3">Tobias</option>
+  <option value="2">Eileen</option>
+  <option value="3">Rafael</option>
 </select>
 ```
 
@@ -1246,7 +1247,7 @@ file_field_tag 'attachment'
 
 #### form_tag
 
-Starts a form tag that points the action to an url configured with `url_for_options` just like `ActionController::Base#url_for`.
+Starts a form tag that points the action to a url configured with `url_for_options` just like `ActionController::Base#url_for`.
 
 ```html+erb
 <%= form_tag '/articles' do %>
@@ -1453,7 +1454,7 @@ This sanitize helper will HTML encode all tags and strip all attributes that are
 sanitize @article.body
 ```
 
-If either the :attributes or :tags options are passed, only the mentioned tags and attributes are allowed and nothing else.
+If either the `:attributes` or `:tags` options are passed, only the mentioned attributes and tags are allowed and nothing else.
 
 ```ruby
 sanitize @article.body, tags: %w(table tr td), attributes: %w(id class style)
@@ -1475,12 +1476,12 @@ Sanitizes a block of CSS code.
 Strips all link tags from text leaving just the link text.
 
 ```ruby
-strip_links("<a href="http://rubyonrails.org">Ruby on Rails</a>")
+strip_links('<a href="http://rubyonrails.org">Ruby on Rails</a>')
 # => Ruby on Rails
 ```
 
 ```ruby
-strip_links("emails to <a href="mailto:me@email.com">me@email.com</a>.")
+strip_links('emails to <a href="mailto:me@email.com">me@email.com</a>.')
 # => emails to me@email.com.
 ```
 

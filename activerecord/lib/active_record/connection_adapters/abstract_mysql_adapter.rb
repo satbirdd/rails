@@ -1,147 +1,26 @@
-require 'arel/visitors/bind_visitor'
+require 'active_record/connection_adapters/abstract_adapter'
+require 'active_record/connection_adapters/mysql/schema_creation'
+require 'active_record/connection_adapters/mysql/schema_definitions'
+require 'active_record/connection_adapters/mysql/schema_dumper'
+
 require 'active_support/core_ext/string/strip'
 
 module ActiveRecord
   module ConnectionAdapters
     class AbstractMysqlAdapter < AbstractAdapter
+      include MySQL::ColumnDumper
       include Savepoints
 
-      module ColumnMethods
-        def primary_key(name, type = :primary_key, **options)
-          options[:auto_increment] = true if type == :bigint
-          super
-        end
-      end
-
-      class ColumnDefinition < ActiveRecord::ConnectionAdapters::ColumnDefinition
-        attr_accessor :charset, :collation
-      end
-
-      class TableDefinition < ActiveRecord::ConnectionAdapters::TableDefinition
-        include ColumnMethods
-
-        def new_column_definition(name, type, options) # :nodoc:
-          column = super
-          case column.type
-          when :primary_key
-            column.type = :integer
-            column.auto_increment = true
-          end
-          column.charset = options[:charset]
-          column.collation = options[:collation]
-          column
-        end
-
-        private
-
-        def create_column_definition(name, type)
-          ColumnDefinition.new(name, type)
-        end
-      end
-
-      class Table < ActiveRecord::ConnectionAdapters::Table
-        include ColumnMethods
-      end
-
-      class SchemaCreation < AbstractAdapter::SchemaCreation
-        def visit_AddColumn(o)
-          add_column_position!(super, column_options(o))
-        end
-
-        private
-
-        def visit_DropForeignKey(name)
-          "DROP FOREIGN KEY #{name}"
-        end
-
-        def visit_TableDefinition(o)
-          name = o.name
-          create_sql = "CREATE#{' TEMPORARY' if o.temporary} TABLE #{quote_table_name(name)} "
-
-          statements = o.columns.map { |c| accept c }
-          statements.concat(o.indexes.map { |column_name, options| index_in_create(name, column_name, options) })
-
-          create_sql << "(#{statements.join(', ')}) " if statements.present?
-          create_sql << "#{o.options}"
-          create_sql << " AS #{@conn.to_sql(o.as)}" if o.as
-          create_sql
-        end
-
-        def visit_ChangeColumnDefinition(o)
-          change_column_sql = "CHANGE #{quote_column_name(o.name)} #{accept(o.column)}"
-          add_column_position!(change_column_sql, column_options(o.column))
-        end
-
-        def column_options(o)
-          column_options = super
-          column_options[:charset] = o.charset
-          column_options[:collation] = o.collation
-          column_options
-        end
-
-        def add_column_options!(sql, options)
-          if options[:charset]
-            sql << " CHARACTER SET #{options[:charset]}"
-          end
-          if options[:collation]
-            sql << " COLLATE #{options[:collation]}"
-          end
-          super
-        end
-
-        def add_column_position!(sql, options)
-          if options[:first]
-            sql << " FIRST"
-          elsif options[:after]
-            sql << " AFTER #{quote_column_name(options[:after])}"
-          end
-          sql
-        end
-
-        def index_in_create(table_name, column_name, options)
-          index_name, index_type, index_columns, index_options, index_algorithm, index_using = @conn.add_index_options(table_name, column_name, options)
-          "#{index_type} INDEX #{quote_column_name(index_name)} #{index_using} (#{index_columns})#{index_options} #{index_algorithm}"
-        end
-      end
-
       def update_table_definition(table_name, base) # :nodoc:
-        Table.new(table_name, base)
+        MySQL::Table.new(table_name, base)
       end
 
       def schema_creation
-        SchemaCreation.new self
-      end
-
-      def column_spec_for_primary_key(column)
-        spec = {}
-        if column.auto_increment?
-          spec[:id] = ':bigint' if column.bigint?
-          return if spec.empty?
-        else
-          spec[:id] = column.type.inspect
-          spec.merge!(prepare_column_options(column).delete_if { |key, _| [:name, :type, :null].include?(key) })
-        end
-        spec
-      end
-
-      def prepare_column_options(column)
-        spec = super
-        spec.delete(:precision) if /time/ === column.sql_type && column.precision == 0
-        spec.delete(:limit)     if :boolean === column.type
-        if column.collation && table_name = column.instance_variable_get(:@table_name)
-          @collation_cache ||= {}
-          @collation_cache[table_name] ||= select_one("SHOW TABLE STATUS LIKE '#{table_name}'")["Collation"]
-          spec[:collation] = column.collation.inspect if column.collation != @collation_cache[table_name]
-        end
-        spec
-      end
-
-      def migration_keys
-        super + [:collation]
+        MySQL::SchemaCreation.new(self)
       end
 
       class Column < ConnectionAdapters::Column # :nodoc:
-        delegate :strict, :collation, :extra, to: :sql_type_metadata, allow_nil: true
+        delegate :strict, :extra, to: :sql_type_metadata, allow_nil: true
 
         def initialize(*)
           super
@@ -152,8 +31,6 @@ module ActiveRecord
         def extract_default
           if blob_or_text_column?
             @default = null || strict ? nil : ''
-          elsif missing_default_forged_as_empty_string?(default)
-            @default = nil
           end
         end
 
@@ -163,7 +40,11 @@ module ActiveRecord
         end
 
         def blob_or_text_column?
-          sql_type =~ /blob/i || type == :text
+          /\A(?:tiny|medium|long)?blob\b/ === sql_type || type == :text
+        end
+
+        def unsigned?
+          /\bunsigned\z/ === sql_type
         end
 
         def case_sensitive?
@@ -176,17 +57,6 @@ module ActiveRecord
 
         private
 
-        # MySQL misreports NOT NULL column default when none is given.
-        # We can't detect this for columns which may have a legitimate ''
-        # default (string) but we can for others (integer, datetime, boolean,
-        # and the rest).
-        #
-        # Test whether the column has default '', is not null, and is not
-        # a type allowing default ''.
-        def missing_default_forged_as_empty_string?(default)
-          type != :string && !null && default == ''
-        end
-
         def assert_valid_default(default)
           if blob_or_text_column? && default.present?
             raise ArgumentError, "#{type} columns cannot have a default value: #{default.inspect}"
@@ -195,12 +65,11 @@ module ActiveRecord
       end
 
       class MysqlTypeMetadata < DelegateClass(SqlTypeMetadata) # :nodoc:
-        attr_reader :collation, :extra, :strict
+        attr_reader :extra, :strict
 
-        def initialize(type_metadata, collation: "", extra: "", strict: false)
+        def initialize(type_metadata, extra: "", strict: false)
           super(type_metadata)
           @type_metadata = type_metadata
-          @collation = collation
           @extra = extra
           @strict = strict
         end
@@ -218,18 +87,17 @@ module ActiveRecord
         protected
 
         def attributes_for_hash
-          [self.class, @type_metadata, collation, extra, strict]
+          [self.class, @type_metadata, extra, strict]
         end
       end
 
       ##
       # :singleton-method:
-      # By default, the MysqlAdapter will consider all columns of type <tt>tinyint(1)</tt>
-      # as boolean. If you wish to disable this emulation (which was the default
-      # behavior in versions 0.13.1 and earlier) you can add the following line
+      # By default, the Mysql2Adapter will consider all columns of type <tt>tinyint(1)</tt>
+      # as boolean. If you wish to disable this emulation you can add the following line
       # to your application.rb file:
       #
-      #   ActiveRecord::ConnectionAdapters::Mysql[2]Adapter.emulate_booleans = false
+      #   ActiveRecord::ConnectionAdapters::Mysql2Adapter.emulate_booleans = false
       class_attribute :emulate_booleans
       self.emulate_booleans = true
 
@@ -242,17 +110,18 @@ module ActiveRecord
       QUOTED_TRUE, QUOTED_FALSE = '1', '0'
 
       NATIVE_DATABASE_TYPES = {
-        :primary_key => "int(11) auto_increment PRIMARY KEY",
-        :string      => { :name => "varchar", :limit => 255 },
-        :text        => { :name => "text" },
-        :integer     => { :name => "int", :limit => 4 },
-        :float       => { :name => "float" },
-        :decimal     => { :name => "decimal" },
-        :datetime    => { :name => "datetime" },
-        :time        => { :name => "time" },
-        :date        => { :name => "date" },
-        :binary      => { :name => "blob" },
-        :boolean     => { :name => "tinyint", :limit => 1 }
+        primary_key: "int auto_increment PRIMARY KEY",
+        string:      { name: "varchar", limit: 255 },
+        text:        { name: "text" },
+        integer:     { name: "int", limit: 4 },
+        float:       { name: "float" },
+        decimal:     { name: "decimal" },
+        datetime:    { name: "datetime" },
+        time:        { name: "time" },
+        date:        { name: "date" },
+        binary:      { name: "blob" },
+        boolean:     { name: "tinyint", limit: 1 },
+        json:        { name: "json" },
       }
 
       INDEX_TYPES  = [:fulltext, :spatial]
@@ -260,14 +129,14 @@ module ActiveRecord
 
       # FIXME: Make the first parameter more similar for the two adapters
       def initialize(connection, logger, connection_options, config)
-        super(connection, logger)
-        @connection_options, @config = connection_options, config
+        super(connection, logger, config)
         @quoted_column_names, @quoted_table_names = {}, {}
 
         @visitor = Arel::Visitors::MySQL.new self
 
         if self.class.type_cast_config_to_boolean(config.fetch(:prepared_statements) { true })
           @prepared_statements = true
+          @visitor.extend(DetermineIfPreparableVisitor)
         else
           @prepared_statements = false
         end
@@ -281,6 +150,10 @@ module ActiveRecord
         else
           ActiveRecord::SchemaMigration.create_table
         end
+      end
+
+      def version
+        @version ||= Version.new(full_version.match(/^\d+\.\d+\.\d+/)[0])
       end
 
       # Returns true, since this connection adapter supports migrations.
@@ -307,7 +180,11 @@ module ActiveRecord
       #
       # http://bugs.mysql.com/bug.php?id=39170
       def supports_transaction_isolation?
-        version[0] >= 5
+        version >= '5.0.0'
+      end
+
+      def supports_explain?
+        true
       end
 
       def supports_indexes_in_create?
@@ -319,11 +196,25 @@ module ActiveRecord
       end
 
       def supports_views?
-        version[0] >= 5
+        version >= '5.0.0'
       end
 
       def supports_datetime_with_precision?
-        (version[0] == 5 && version[1] >= 6) || version[0] >= 6
+        version >= '5.6.4'
+      end
+
+      # 5.0.0 definitely supports it, possibly supported by earlier versions but
+      # not sure
+      def supports_advisory_locks?
+        version >= '5.0.0'
+      end
+
+      def get_advisory_lock(lock_name, timeout = 0) # :nodoc:
+        select_value("SELECT GET_LOCK('#{lock_name}', #{timeout});").to_s == '1'
+      end
+
+      def release_advisory_lock(lock_name) # :nodoc:
+        select_value("SELECT RELEASE_LOCK('#{lock_name}')").to_s == '1'
       end
 
       def native_database_types
@@ -342,8 +233,8 @@ module ActiveRecord
         raise NotImplementedError
       end
 
-      def new_column(field, default, sql_type_metadata = nil, null = true) # :nodoc:
-        Column.new(field, default, sql_type_metadata, null)
+      def new_column(field, default, sql_type_metadata = nil, null = true, default_function = nil, collation = nil) # :nodoc:
+        Column.new(field, default, sql_type_metadata, null, default_function, collation)
       end
 
       # Must return the MySQL error number from the exception, if the exception has an
@@ -386,6 +277,14 @@ module ActiveRecord
         0
       end
 
+      def quoted_date(value)
+        if supports_datetime_with_precision?
+          super
+        else
+          super.sub(/\.\d{6}\z/, '')
+        end
+      end
+
       # REFERENTIAL INTEGRITY ====================================
 
       def disable_referential_integrity #:nodoc:
@@ -403,6 +302,80 @@ module ActiveRecord
       # DATABASE STATEMENTS ======================================
       #++
 
+      def explain(arel, binds = [])
+        sql     = "EXPLAIN #{to_sql(arel, binds)}"
+        start   = Time.now
+        result  = exec_query(sql, 'EXPLAIN', binds)
+        elapsed = Time.now - start
+
+        ExplainPrettyPrinter.new.pp(result, elapsed)
+      end
+
+      class ExplainPrettyPrinter # :nodoc:
+        # Pretty prints the result of an EXPLAIN in a way that resembles the output of the
+        # MySQL shell:
+        #
+        #   +----+-------------+-------+-------+---------------+---------+---------+-------+------+-------------+
+        #   | id | select_type | table | type  | possible_keys | key     | key_len | ref   | rows | Extra       |
+        #   +----+-------------+-------+-------+---------------+---------+---------+-------+------+-------------+
+        #   |  1 | SIMPLE      | users | const | PRIMARY       | PRIMARY | 4       | const |    1 |             |
+        #   |  1 | SIMPLE      | posts | ALL   | NULL          | NULL    | NULL    | NULL  |    1 | Using where |
+        #   +----+-------------+-------+-------+---------------+---------+---------+-------+------+-------------+
+        #   2 rows in set (0.00 sec)
+        #
+        # This is an exercise in Ruby hyperrealism :).
+        def pp(result, elapsed)
+          widths    = compute_column_widths(result)
+          separator = build_separator(widths)
+
+          pp = []
+
+          pp << separator
+          pp << build_cells(result.columns, widths)
+          pp << separator
+
+          result.rows.each do |row|
+            pp << build_cells(row, widths)
+          end
+
+          pp << separator
+          pp << build_footer(result.rows.length, elapsed)
+
+          pp.join("\n") + "\n"
+        end
+
+        private
+
+        def compute_column_widths(result)
+          [].tap do |widths|
+            result.columns.each_with_index do |column, i|
+              cells_in_column = [column] + result.rows.map {|r| r[i].nil? ? 'NULL' : r[i].to_s}
+              widths << cells_in_column.map(&:length).max
+            end
+          end
+        end
+
+        def build_separator(widths)
+          padding = 1
+          '+' + widths.map {|w| '-' * (w + (padding*2))}.join('+') + '+'
+        end
+
+        def build_cells(items, widths)
+          cells = []
+          items.each_with_index do |item, i|
+            item = 'NULL' if item.nil?
+            justifier = item.is_a?(Numeric) ? 'rjust' : 'ljust'
+            cells << item.to_s.send(justifier, widths[i])
+          end
+          '| ' + cells.join(' | ') + ' |'
+        end
+
+        def build_footer(nrows, elapsed)
+          rows_label = nrows == 1 ? 'row' : 'rows'
+          "#{nrows} #{rows_label} in set (%.2f sec)" % elapsed
+        end
+      end
+
       def clear_cache!
         super
         reload_type_map
@@ -413,16 +386,11 @@ module ActiveRecord
         log(sql, name) { @connection.query(sql) }
       end
 
-      # MysqlAdapter has to free a result after using it, so we use this method to write
-      # stuff in an abstract way without concerning ourselves about whether it needs to be
-      # explicitly freed or not.
-      def execute_and_free(sql, name = nil) #:nodoc:
+      # Mysql2Adapter doesn't have to free a result after using it, but we use this method
+      # to write stuff in an abstract way without concerning ourselves about whether it
+      # needs to be explicitly freed or not.
+      def execute_and_free(sql, name = nil) # :nodoc:
         yield execute(sql, name)
-      end
-
-      def update_sql(sql, name = nil) #:nodoc:
-        super
-        @connection.affected_rows
       end
 
       def begin_db_transaction
@@ -445,7 +413,7 @@ module ActiveRecord
       # In the simple case, MySQL allows us to place JOINs directly into the UPDATE
       # query. However, this does not allow for LIMIT, OFFSET and ORDER. To support
       # these, we must use a subquery.
-      def join_to_update(update, select) #:nodoc:
+      def join_to_update(update, select, key) # :nodoc:
         if select.limit || select.offset || select.orders.any?
           super
         else
@@ -506,33 +474,70 @@ module ActiveRecord
         show_variable 'collation_database'
       end
 
-      def tables(name = nil, database = nil, like = nil) #:nodoc:
-        sql = "SHOW TABLES "
-        sql << "IN #{quote_table_name(database)} " if database
-        sql << "LIKE #{quote(like)}" if like
+      def tables(name = nil) # :nodoc:
+        ActiveSupport::Deprecation.warn(<<-MSG.squish)
+          #tables currently returns both tables and views.
+          This behavior is deprecated and will be changed with Rails 5.1 to only return tables.
+          Use #data_sources instead.
+        MSG
 
-        execute_and_free(sql, 'SCHEMA') do |result|
-          result.collect(&:first)
+        if name
+          ActiveSupport::Deprecation.warn(<<-MSG.squish)
+            Passing arguments to #tables is deprecated without replacement.
+          MSG
         end
+
+        data_sources
+      end
+
+      def data_sources
+        sql = "SELECT table_name FROM information_schema.tables "
+        sql << "WHERE table_schema = #{quote(@config[:database])}"
+
+        select_values(sql, 'SCHEMA')
       end
 
       def truncate(table_name, name = nil)
         execute "TRUNCATE TABLE #{quote_table_name(table_name)}", name
       end
 
-      def table_exists?(name)
-        return false unless name.present?
-        return true if tables(nil, nil, name).any?
+      def table_exists?(table_name)
+        # Update lib/active_record/internal_metadata.rb when this gets removed
+        ActiveSupport::Deprecation.warn(<<-MSG.squish)
+          #table_exists? currently checks both tables and views.
+          This behavior is deprecated and will be changed with Rails 5.1 to only check tables.
+          Use #data_source_exists? instead.
+        MSG
 
-        name          = name.to_s
-        schema, table = name.split('.', 2)
+        data_source_exists?(table_name)
+      end
 
-        unless table # A table was provided without a schema
-          table  = schema
-          schema = nil
-        end
+      def data_source_exists?(table_name)
+        return false unless table_name.present?
 
-        tables(nil, schema, table).any?
+        schema, name = table_name.to_s.split('.', 2)
+        schema, name = @config[:database], schema unless name # A table was provided without a schema
+
+        sql = "SELECT table_name FROM information_schema.tables "
+        sql << "WHERE table_schema = #{quote(schema)} AND table_name = #{quote(name)}"
+
+        select_values(sql, 'SCHEMA').any?
+      end
+
+      def views # :nodoc:
+        select_values("SHOW FULL TABLES WHERE table_type = 'VIEW'", 'SCHEMA')
+      end
+
+      def view_exists?(view_name) # :nodoc:
+        return false unless view_name.present?
+
+        schema, name = view_name.to_s.split('.', 2)
+        schema, name = @config[:database], schema unless name # A view was provided without a schema
+
+        sql = "SELECT table_name FROM information_schema.tables WHERE table_type = 'VIEW'"
+        sql << " AND table_schema = #{quote(schema)} AND table_name = #{quote(name)}"
+
+        select_values(sql, 'SCHEMA').any?
       end
 
       # Returns an array of indexes for the given table.
@@ -564,10 +569,8 @@ module ActiveRecord
         sql = "SHOW FULL FIELDS FROM #{quote_table_name(table_name)}"
         execute_and_free(sql, 'SCHEMA') do |result|
           each_hash(result).map do |field|
-            field_name = set_field_encoding(field[:Field])
-            sql_type = field[:Type]
-            type_metadata = fetch_type_metadata(sql_type, field[:Collation], field[:Extra])
-            new_column(field_name, field[:Default], type_metadata, field[:Null] == "YES")
+            type_metadata = fetch_type_metadata(field[:Type], field[:Extra])
+            new_column(field[:Field], field[:Default], type_metadata, field[:Null] == "YES", nil, field[:Collation])
           end
         end
       end
@@ -616,6 +619,7 @@ module ActiveRecord
       # it can be helpful to provide these in a migration's +change+ method so it can be reverted.
       # In that case, +options+ and the block will be used by create_table.
       def drop_table(table_name, options = {})
+        create_table_info_cache.delete(table_name) if create_table_info_cache.key?(table_name)
         execute "DROP#{' TEMPORARY' if options[:temporary]} TABLE#{' IF EXISTS' if options[:if_exists]} #{quote_table_name(table_name)}#{' CASCADE' if options[:force] == :cascade}"
       end
 
@@ -629,12 +633,13 @@ module ActiveRecord
         end
       end
 
-      def change_column_default(table_name, column_name, default) #:nodoc:
+      def change_column_default(table_name, column_name, default_or_changes) #:nodoc:
+        default = extract_new_default_value(default_or_changes)
         column = column_for(table_name, column_name)
         change_column table_name, column_name, column.sql_type, :default => default
       end
 
-      def change_column_null(table_name, column_name, null, default = nil)
+      def change_column_null(table_name, column_name, null, default = nil) #:nodoc:
         column = column_for(table_name, column_name)
 
         unless null || default.nil?
@@ -654,8 +659,8 @@ module ActiveRecord
       end
 
       def add_index(table_name, column_name, options = {}) #:nodoc:
-        index_name, index_type, index_columns, index_options, index_algorithm, index_using = add_index_options(table_name, column_name, options)
-        execute "CREATE #{index_type} INDEX #{quote_column_name(index_name)} #{index_using} ON #{quote_table_name(table_name)} (#{index_columns})#{index_options} #{index_algorithm}"
+        index_name, index_type, index_columns, _, index_algorithm, index_using = add_index_options(table_name, column_name, options)
+        execute "CREATE #{index_type} INDEX #{quote_column_name(index_name)} #{index_using} ON #{quote_table_name(table_name)} (#{index_columns}) #{index_algorithm}"
       end
 
       def foreign_keys(table_name)
@@ -670,7 +675,7 @@ module ActiveRecord
             AND fk.table_name = '#{table_name}'
         SQL
 
-        create_table_info = select_one("SHOW CREATE TABLE #{quote_table_name(table_name)}")["Create Table"]
+        create_table_info = create_table_info(table_name)
 
         fk_info.map do |row|
           options = {
@@ -686,73 +691,68 @@ module ActiveRecord
         end
       end
 
+      def table_options(table_name)
+        create_table_info = create_table_info(table_name)
+
+        # strip create_definitions and partition_options
+        raw_table_options = create_table_info.sub(/\A.*\n\) /m, '').sub(/\n\/\*!.*\*\/\n\z/m, '').strip
+
+        # strip AUTO_INCREMENT
+        raw_table_options.sub(/(ENGINE=\w+)(?: AUTO_INCREMENT=\d+)/, '\1')
+      end
+
       # Maps logical Rails types to MySQL-specific data types.
-      def type_to_sql(type, limit = nil, precision = nil, scale = nil)
-        case type.to_s
-        when 'binary'
-          case limit
-          when 0..0xfff;           "varbinary(#{limit})"
-          when nil;                "blob"
-          when 0x1000..0xffffffff; "blob(#{limit})"
-          else raise(ActiveRecordError, "No binary type has character length #{limit}")
-          end
+      def type_to_sql(type, limit = nil, precision = nil, scale = nil, unsigned = nil)
+        sql = case type.to_s
         when 'integer'
-          case limit
-          when 1; 'tinyint'
-          when 2; 'smallint'
-          when 3; 'mediumint'
-          when nil, 4, 11; 'int(11)'  # compatibility with MySQL default
-          when 5..8; 'bigint'
-          else raise(ActiveRecordError, "No integer type has byte size #{limit}")
-          end
+          integer_to_sql(limit)
         when 'text'
-          case limit
-          when 0..0xff;               'tinytext'
-          when nil, 0x100..0xffff;    'text'
-          when 0x10000..0xffffff;     'mediumtext'
-          when 0x1000000..0xffffffff; 'longtext'
-          else raise(ActiveRecordError, "No text type has character length #{limit}")
+          text_to_sql(limit)
+        when 'blob'
+          binary_to_sql(limit)
+        when 'binary'
+          if (0..0xfff) === limit
+            "varbinary(#{limit})"
+          else
+            binary_to_sql(limit)
           end
         else
-          super
+          super(type, limit, precision, scale)
         end
+
+        sql << ' unsigned' if unsigned && type != :primary_key
+        sql
       end
 
       # SHOW VARIABLES LIKE 'name'
       def show_variable(name)
-        variables = select_all("SHOW VARIABLES LIKE '#{name}'", 'SCHEMA')
+        variables = select_all("select @@#{name} as 'Value'", 'SCHEMA')
         variables.first['Value'] unless variables.empty?
+      rescue ActiveRecord::StatementInvalid
+        nil
       end
 
-      # Returns a table's primary key and belonging sequence.
-      def pk_and_sequence_for(table)
-        execute_and_free("SHOW CREATE TABLE #{quote_table_name(table)}", 'SCHEMA') do |result|
-          create_table = each_hash(result).first[:"Create Table"]
-          if create_table.to_s =~ /PRIMARY KEY\s+(?:USING\s+\w+\s+)?\((.+)\)/
-            keys = $1.split(",").map { |key| key.delete('`"') }
-            keys.length == 1 ? [keys.first, nil] : nil
-          else
-            nil
-          end
-        end
-      end
+      def primary_keys(table_name) # :nodoc:
+        raise ArgumentError unless table_name.present?
 
-      # Returns just a table's primary key
-      def primary_key(table)
-        pk_and_sequence = pk_and_sequence_for(table)
-        pk_and_sequence && pk_and_sequence.first
-      end
+        schema, name = table_name.to_s.split('.', 2)
+        schema, name = @config[:database], schema unless name # A table was provided without a schema
 
-      def case_sensitive_modifier(node, table_attribute)
-        node = Arel::Nodes.build_quoted node, table_attribute
-        Arel::Nodes::Bin.new(node)
+        select_values(<<-SQL.strip_heredoc, 'SCHEMA')
+          SELECT column_name
+          FROM information_schema.key_column_usage
+          WHERE constraint_name = 'PRIMARY'
+            AND table_schema = #{quote(schema)}
+            AND table_name = #{quote(name)}
+          ORDER BY ordinal_position
+        SQL
       end
 
       def case_sensitive_comparison(table, attribute, column, value)
-        if column.case_sensitive?
-          table[attribute].eq(value)
-        else
+        if value.nil? || column.case_sensitive?
           super
+        else
+          table[attribute].eq(Arel::Nodes::Bin.new(Arel::Nodes::BindParam.new))
         end
       end
 
@@ -760,8 +760,23 @@ module ActiveRecord
         if column.case_sensitive?
           super
         else
-          table[attribute].eq(value)
+          table[attribute].eq(Arel::Nodes::BindParam.new)
         end
+      end
+
+      # In MySQL 5.7.5 and up, ONLY_FULL_GROUP_BY affects handling of queries that use
+      # DISTINCT and ORDER BY. It requires the ORDER BY columns in the select list for
+      # distinct queries, and requires that the ORDER BY include the distinct column.
+      # See https://dev.mysql.com/doc/refman/5.7/en/group-by-handling.html
+      def columns_for_distinct(columns, orders) # :nodoc:
+        order_columns = orders.reject(&:blank?).map { |s|
+          # Convert Arel node to string
+          s = s.to_sql unless s.is_a?(String)
+          # Remove any ASC/DESC modifiers
+          s.gsub(/\s+(?:ASC|DESC)\b/i, '')
+        }.reject(&:blank?).map.with_index { |column, i| "#{column} AS alias_#{i}" }
+
+        [super, *order_columns].join(', ')
       end
 
       def strict_mode?
@@ -789,6 +804,7 @@ module ActiveRecord
         m.register_type %r(longblob)i,   Type::Binary.new(limit: 2**32 - 1)
         m.register_type %r(^float)i,     Type::Float.new(limit: 24)
         m.register_type %r(^double)i,    Type::Float.new(limit: 53)
+        m.register_type %r(^json)i,      MysqlJson.new
 
         register_integer_type m, %r(^bigint)i,    limit: 8
         register_integer_type m, %r(^int)i,       limit: 4
@@ -797,7 +813,6 @@ module ActiveRecord
         register_integer_type m, %r(^tinyint)i,   limit: 1
 
         m.alias_type %r(tinyint\(1\))i,  'boolean' if emulate_booleans
-        m.alias_type %r(set)i,           'varchar'
         m.alias_type %r(year)i,          'integer'
         m.alias_type %r(bit)i,           'binary'
 
@@ -806,11 +821,17 @@ module ActiveRecord
             .split(',').map{|enum| enum.strip.length - 2}.max
           MysqlString.new(limit: limit)
         end
+
+        m.register_type(%r(^set)i) do |sql_type|
+          limit = sql_type[/^set\((.+)\)/i, 1]
+            .split(',').map{|set| set.strip.length - 1}.sum - 1
+          MysqlString.new(limit: limit)
+        end
       end
 
       def register_integer_type(mapping, key, options) # :nodoc:
         mapping.register_type(key) do |sql_type|
-          if /unsigned/i =~ sql_type
+          if /\bunsigned\z/ === sql_type
             Type::UnsignedInteger.new(options)
           else
             Type::Integer.new(options)
@@ -826,21 +847,8 @@ module ActiveRecord
         end
       end
 
-      def fetch_type_metadata(sql_type, collation = "", extra = "")
-        MysqlTypeMetadata.new(super(sql_type), collation: collation, extra: extra, strict: strict_mode?)
-      end
-
-      # MySQL is too stupid to create a temporary table for use subquery, so we have
-      # to give it some prompting in the form of a subsubquery. Ugh!
-      def subquery_for(key, select)
-        subsubselect = select.clone
-        subsubselect.projections = [key]
-
-        subselect = Arel::SelectManager.new(select.engine)
-        subselect.project Arel.sql(key.name)
-        # Materialized subquery by adding distinct
-        # to work with MySQL 5.7.6 which sets optimizer_switch='derived_merge=on'
-        subselect.from subsubselect.distinct.as('__active_record_temp')
+      def fetch_type_metadata(sql_type, extra = "")
+        MysqlTypeMetadata.new(super(sql_type), extra: extra, strict: strict_mode?)
       end
 
       def add_index_length(option_strings, column_names, options = {})
@@ -871,9 +879,9 @@ module ActiveRecord
       def translate_exception(exception, message)
         case error_number(exception)
         when 1062
-          RecordNotUnique.new(message, exception)
+          RecordNotUnique.new(message)
         when 1452
-          InvalidForeignKey.new(message, exception)
+          InvalidForeignKey.new(message)
         else
           super
         end
@@ -882,7 +890,7 @@ module ActiveRecord
       def add_column_sql(table_name, column_name, type, options = {})
         td = create_table_definition(table_name)
         cd = td.new_column_definition(column_name, type, options)
-        schema_creation.visit_AddColumn cd
+        schema_creation.accept(AddColumnDefinition.new(cd))
       end
 
       def change_column_sql(table_name, column_name, type, options = {})
@@ -924,8 +932,9 @@ module ActiveRecord
       end
 
       def add_index_sql(table_name, column_name, options = {})
-        index_name, index_type, index_columns = add_index_options(table_name, column_name, options)
-        "ADD #{index_type} INDEX #{index_name} (#{index_columns})"
+        index_name, index_type, index_columns, _, index_algorithm, index_using = add_index_options(table_name, column_name, options)
+        index_algorithm[0, 0] = ", " if index_algorithm.present?
+        "ADD #{index_type} INDEX #{quote_column_name(index_name)} #{index_using} (#{index_columns})#{index_algorithm}"
       end
 
       def remove_index_sql(table_name, options = {})
@@ -943,8 +952,19 @@ module ActiveRecord
 
       private
 
-      def version
-        @version ||= full_version.scan(/^(\d+)\.(\d+)\.(\d+)/).flatten.map(&:to_i)
+      # MySQL is too stupid to create a temporary table for use subquery, so we have
+      # to give it some prompting in the form of a subsubquery. Ugh!
+      def subquery_for(key, select)
+        subsubselect = select.clone
+        subsubselect.projections = [key]
+
+        # Materialize subquery by adding distinct
+        # to work with MySQL 5.7.6 which sets optimizer_switch='derived_merge=on'
+        subsubselect.distinct unless select.limit || select.offset || select.orders.any?
+
+        subselect = Arel::SelectManager.new(select.engine)
+        subselect.project Arel.sql(key.name)
+        subselect.from subsubselect.as('__active_record_temp')
       end
 
       def mariadb?
@@ -952,7 +972,7 @@ module ActiveRecord
       end
 
       def supports_rename_index?
-        mariadb? ? false : (version[0] == 5 && version[1] >= 7) || version[0] >= 6
+        mariadb? ? false : version >= '5.7.6'
       end
 
       def configure_connection
@@ -966,15 +986,17 @@ module ActiveRecord
         wait_timeout = 2147483 unless wait_timeout.is_a?(Fixnum)
         variables['wait_timeout'] = self.class.type_cast_config_to_integer(wait_timeout)
 
+        defaults = [':default', :default].to_set
+
         # Make MySQL reject illegal values rather than truncating or blanking them, see
-        # http://dev.mysql.com/doc/refman/5.6/en/sql-mode.html#sqlmode_strict_all_tables
+        # http://dev.mysql.com/doc/refman/5.7/en/sql-mode.html#sqlmode_strict_all_tables
         # If the user has provided another value for sql_mode, don't replace it.
-        unless variables.has_key?('sql_mode')
+        unless variables.has_key?('sql_mode') || defaults.include?(@config[:strict])
           variables['sql_mode'] = strict_mode? ? 'STRICT_ALL_TABLES' : ''
         end
 
         # NAMES does not have an equals sign, see
-        # http://dev.mysql.com/doc/refman/5.6/en/set-statement.html#id944430
+        # http://dev.mysql.com/doc/refman/5.7/en/set-statement.html#id944430
         # (trailing comma because variable_assignments will always have content)
         if @config[:encoding]
           encoding = "NAMES #{@config[:encoding]}"
@@ -984,7 +1006,7 @@ module ActiveRecord
 
         # Gather up all of the SET variables...
         variable_assignments = variables.map do |k, v|
-          if v == ':default' || v == :default
+          if defaults.include?(v)
             "@@SESSION.#{k} = DEFAULT" # Sets the value to the global or compile default
           elsif !v.nil?
             "@@SESSION.#{k} = #{quote(v)}"
@@ -1005,8 +1027,56 @@ module ActiveRecord
         end
       end
 
+      def create_table_info_cache # :nodoc:
+        @create_table_info_cache ||= {}
+      end
+
+      def create_table_info(table_name) # :nodoc:
+        create_table_info_cache[table_name] ||= select_one("SHOW CREATE TABLE #{quote_table_name(table_name)}")["Create Table"]
+      end
+
       def create_table_definition(name, temporary = false, options = nil, as = nil) # :nodoc:
-        TableDefinition.new(native_database_types, name, temporary, options, as)
+        MySQL::TableDefinition.new(name, temporary, options, as)
+      end
+
+      def integer_to_sql(limit) # :nodoc:
+        case limit
+        when 1; 'tinyint'
+        when 2; 'smallint'
+        when 3; 'mediumint'
+        when nil, 4; 'int'
+        when 5..8; 'bigint'
+        when 11; 'int(11)' # backward compatibility with Rails 2.0
+        else raise(ActiveRecordError, "No integer type has byte size #{limit}")
+        end
+      end
+
+      def text_to_sql(limit) # :nodoc:
+        case limit
+        when 0..0xff;               'tinytext'
+        when nil, 0x100..0xffff;    'text'
+        when 0x10000..0xffffff;     'mediumtext'
+        when 0x1000000..0xffffffff; 'longtext'
+        else raise(ActiveRecordError, "No text type has byte length #{limit}")
+        end
+      end
+
+      def binary_to_sql(limit) # :nodoc:
+        case limit
+        when 0..0xff;               'tinyblob'
+        when nil, 0x100..0xffff;    'blob'
+        when 0x10000..0xffffff;     'mediumblob'
+        when 0x1000000..0xffffffff; 'longblob'
+        else raise(ActiveRecordError, "No binary type has byte length #{limit}")
+        end
+      end
+
+      class MysqlJson < Type::Internal::AbstractJson # :nodoc:
+        def changed_in_place?(raw_old_value, new_value)
+          # Normalization is required because MySQL JSON data format includes
+          # the space between the elements.
+          super(serialize(deserialize(raw_old_value)), new_value)
+        end
       end
 
       class MysqlString < Type::String # :nodoc:
@@ -1029,8 +1099,9 @@ module ActiveRecord
         end
       end
 
-      ActiveRecord::Type.register(:string, MysqlString, adapter: :mysql)
+      ActiveRecord::Type.register(:json, MysqlJson, adapter: :mysql2)
       ActiveRecord::Type.register(:string, MysqlString, adapter: :mysql2)
+      ActiveRecord::Type.register(:unsigned_integer, Type::UnsignedInteger, adapter: :mysql2)
     end
   end
 end

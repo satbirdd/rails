@@ -1,5 +1,5 @@
 module ActiveRecord
-  # = Active Record Persistence
+  # = Active Record \Persistence
   module Persistence
     extend ActiveSupport::Concern
 
@@ -106,7 +106,7 @@ module ActiveRecord
     # the existing record gets updated.
     #
     # By default, save always run validations. If any of them fail the action
-    # is cancelled and +save+ returns +false+. However, if you supply
+    # is cancelled and #save returns +false+. However, if you supply
     # validate: false, validations are bypassed altogether. See
     # ActiveRecord::Validations for more information.
     #
@@ -132,7 +132,7 @@ module ActiveRecord
     # If the model is new, a record gets created in the database, otherwise
     # the existing record gets updated.
     #
-    # With <tt>save!</tt> validations always run. If any of them fail
+    # With #save! validations always run. If any of them fail
     # ActiveRecord::RecordInvalid gets raised. See ActiveRecord::Validations
     # for more information.
     #
@@ -148,7 +148,7 @@ module ActiveRecord
     # Attributes marked as readonly are silently ignored if the record is
     # being updated.
     def save!(*args)
-      create_or_update(*args) || raise(RecordNotSaved.new(nil, self))
+      create_or_update(*args) || raise(RecordNotSaved.new("Failed to save the record", self))
     end
 
     # Deletes the record in the database and freezes this instance to
@@ -158,7 +158,7 @@ module ActiveRecord
     # The row is simply removed with an SQL +DELETE+ statement on the
     # record's primary key, and no callbacks are executed.
     #
-    # Note that this will also delete records marked as <tt>readonly?</tt>.
+    # Note that this will also delete records marked as {#readonly?}[rdoc-ref:Core#readonly?].
     #
     # To enforce the object's +before_destroy+ and +after_destroy+
     # callbacks or any <tt>:dependent</tt> association
@@ -193,7 +193,7 @@ module ActiveRecord
     # and #destroy! raises ActiveRecord::RecordNotDestroyed.
     # See ActiveRecord::Callbacks for further details.
     def destroy!
-      destroy || raise(ActiveRecord::RecordNotDestroyed, self)
+      destroy || _raise_record_not_destroyed
     end
 
     # Returns an instance of the specified +klass+ with the attributes of the
@@ -205,19 +205,21 @@ module ActiveRecord
     # instance using the companies/company partial instead of clients/client.
     #
     # Note: The new instance will share a link to the same attributes as the original class.
-    # So any change to the attributes in either instance will affect the other.
+    # Therefore the sti column value will still be the same.
+    # Any change to the attributes on either instance will affect both instances.
+    # If you want to change the sti column as well, use #becomes! instead.
     def becomes(klass)
       became = klass.new
       became.instance_variable_set("@attributes", @attributes)
-      changed_attributes = @changed_attributes if defined?(@changed_attributes)
-      became.instance_variable_set("@changed_attributes", changed_attributes || {})
+      became.instance_variable_set("@mutation_tracker", @mutation_tracker) if defined?(@mutation_tracker)
+      became.instance_variable_set("@changed_attributes", attributes_changed_by_setter)
       became.instance_variable_set("@new_record", new_record?)
       became.instance_variable_set("@destroyed", destroyed?)
-      became.instance_variable_set("@errors", errors)
+      became.errors.copy!(errors)
       became
     end
 
-    # Wrapper around +becomes+ that also changes the instance's sti column value.
+    # Wrapper around #becomes that also changes the instance's sti column value.
     # This is especially useful if you want to persist the changed class in your
     # database.
     #
@@ -237,14 +239,14 @@ module ActiveRecord
     # This is especially useful for boolean flags on existing records. Also note that
     #
     # * Validation is skipped.
-    # * Callbacks are invoked.
+    # * \Callbacks are invoked.
     # * updated_at/updated_on column is updated if that column is available.
     # * Updates all the attributes that are dirty in this object.
     #
-    # This method raises an +ActiveRecord::ActiveRecordError+  if the
+    # This method raises an ActiveRecord::ActiveRecordError  if the
     # attribute is marked as readonly.
     #
-    # See also +update_column+.
+    # See also #update_column.
     def update_attribute(name, value)
       name = name.to_s
       verify_readonly_attribute(name)
@@ -266,7 +268,7 @@ module ActiveRecord
 
     alias update_attributes update
 
-    # Updates its receiver just like +update+ but calls <tt>save!</tt> instead
+    # Updates its receiver just like #update but calls #save! instead
     # of +save+, so an exception is raised if the record is invalid.
     def update!(attributes)
       # The following transaction covers any possible database side-effects of the
@@ -293,11 +295,12 @@ module ActiveRecord
     # the database, but take into account that in consequence the regular update
     # procedures are totally bypassed. In particular:
     #
-    # * Validations are skipped.
-    # * Callbacks are skipped.
+    # * \Validations are skipped.
+    # * \Callbacks are skipped.
     # * +updated_at+/+updated_on+ are not updated.
+    # * However, attributes are serialized with the same rules as ActiveRecord::Relation#update_all
     #
-    # This method raises an +ActiveRecord::ActiveRecordError+ when called on new
+    # This method raises an ActiveRecord::ActiveRecordError when called on new
     # objects, or when at least one of the attributes is marked as readonly.
     def update_columns(attributes)
       raise ActiveRecordError, "cannot update a new record" if new_record?
@@ -325,41 +328,51 @@ module ActiveRecord
       self
     end
 
-    # Wrapper around +increment+ that saves the record. This method differs from
+    # Wrapper around #increment that saves the record. This method differs from
     # its non-bang version in that it passes through the attribute setter.
     # Saving is not subjected to validation checks. Returns +true+ if the
     # record could be saved.
     def increment!(attribute, by = 1)
-      increment(attribute, by).update_attribute(attribute, self[attribute])
+      increment(attribute, by)
+      change = public_send(attribute) - (attribute_was(attribute.to_s) || 0)
+      self.class.update_counters(id, attribute => change)
+      clear_attribute_change(attribute) # eww
+      self
     end
 
     # Initializes +attribute+ to zero if +nil+ and subtracts the value passed as +by+ (default is 1).
     # The decrement is performed directly on the underlying attribute, no setter is invoked.
     # Only makes sense for number-based attributes. Returns +self+.
     def decrement(attribute, by = 1)
-      self[attribute] ||= 0
-      self[attribute] -= by
-      self
+      increment(attribute, -by)
     end
 
-    # Wrapper around +decrement+ that saves the record. This method differs from
+    # Wrapper around #decrement that saves the record. This method differs from
     # its non-bang version in that it passes through the attribute setter.
     # Saving is not subjected to validation checks. Returns +true+ if the
     # record could be saved.
     def decrement!(attribute, by = 1)
-      decrement(attribute, by).update_attribute(attribute, self[attribute])
+      increment!(attribute, -by)
     end
 
     # Assigns to +attribute+ the boolean opposite of <tt>attribute?</tt>. So
     # if the predicate returns +true+ the attribute will become +false+. This
     # method toggles directly the underlying value without calling any setter.
     # Returns +self+.
+    #
+    # Example:
+    #
+    #   user = User.first
+    #   user.banned? # => false
+    #   user.toggle(:banned)
+    #   user.banned? # => true
+    #
     def toggle(attribute)
       self[attribute] = !public_send("#{attribute}?")
       self
     end
 
-    # Wrapper around +toggle+ that saves the record. This method differs from
+    # Wrapper around #toggle that saves the record. This method differs from
     # its non-bang version in that it passes through the attribute setter.
     # Saving is not subjected to validation checks. Returns +true+ if the
     # record could be saved.
@@ -380,9 +393,9 @@ module ActiveRecord
     #   # => #<Account id: 1, email: 'account@example.com'>
     #
     # Attributes are reloaded from the database, and caches busted, in
-    # particular the associations cache.
+    # particular the associations cache and the QueryCache.
     #
-    # If the record no longer exists in the database <tt>ActiveRecord::RecordNotFound</tt>
+    # If the record no longer exists in the database ActiveRecord::RecordNotFound
     # is raised. Otherwise, in addition to the in-place modification the method
     # returns +self+ for convenience.
     #
@@ -416,6 +429,8 @@ module ActiveRecord
     #   end
     #
     def reload(options = nil)
+      self.class.connection.clear_query_cache
+
       fresh_object =
         if options && options[:lock]
           self.class.unscoped { self.class.lock(options[:lock]).find(id) }
@@ -428,7 +443,7 @@ module ActiveRecord
       self
     end
 
-    # Saves the record with the updated_at/on attributes set to the current time 
+    # Saves the record with the updated_at/on attributes set to the current time
     # or the time specified.
     # Please note that no validation is performed and only the +after_touch+,
     # +after_commit+ and +after_rollback+ callbacks are executed.
@@ -442,8 +457,8 @@ module ActiveRecord
     #   product.touch(:designed_at)           # updates the designed_at attribute and updated_at/on
     #   product.touch(:started_at, :ended_at) # updates started_at, ended_at and updated_at/on attributes
     #
-    # If used along with +belongs_to+ then +touch+ will invoke +touch+ method on
-    # associated object.
+    # If used along with {belongs_to}[rdoc-ref:Associations::ClassMethods#belongs_to]
+    # then +touch+ will invoke +touch+ method on associated object.
     #
     #   class Brake < ActiveRecord::Base
     #     belongs_to :car, touch: true
@@ -544,6 +559,17 @@ module ActiveRecord
 
     def verify_readonly_attribute(name)
       raise ActiveRecordError, "#{name} is marked as readonly" if self.class.readonly_attributes.include?(name)
+    end
+
+    def _raise_record_not_destroyed
+      @_association_destroy_exception ||= nil
+      raise @_association_destroy_exception || RecordNotDestroyed.new("Failed to destroy the record", self)
+    ensure
+      @_association_destroy_exception = nil
+    end
+
+    def belongs_to_touch_method
+      :touch
     end
   end
 end

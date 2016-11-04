@@ -1,6 +1,5 @@
 require 'generators/generators_test_helper'
 require 'rails/generators/rails/scaffold_controller/scaffold_controller_generator'
-require 'mocha/setup' # FIXME: stop using mocha
 
 class NamedBaseTest < Rails::Generators::TestCase
   include GeneratorsTestHelper
@@ -80,10 +79,13 @@ class NamedBaseTest < Rails::Generators::TestCase
 
   def test_application_name
     g = generator ['Admin::Foo']
-    Rails.stubs(:application).returns(Object.new)
-    assert_name g, "object", :application_name
-    Rails.stubs(:application).returns(nil)
-    assert_name g, "application", :application_name
+    Rails.stub(:application, Object.new) do
+      assert_name g, "object", :application_name
+    end
+
+    Rails.stub(:application, nil) do
+      assert_name g, "application", :application_name
+    end
   end
 
   def test_index_helper
@@ -103,11 +105,11 @@ class NamedBaseTest < Rails::Generators::TestCase
 
   def test_hide_namespace
     g = generator ['Hidden']
-    g.class.stubs(:namespace).returns('hidden')
-
-    assert !Rails::Generators.hidden_namespaces.include?('hidden')
-    g.class.hide!
-    assert Rails::Generators.hidden_namespaces.include?('hidden')
+    g.class.stub(:namespace, 'hidden') do
+      assert !Rails::Generators.hidden_namespaces.include?('hidden')
+      g.class.hide!
+      assert Rails::Generators.hidden_namespaces.include?('hidden')
+    end
   end
 
   def test_scaffold_plural_names_with_model_name_option

@@ -375,6 +375,13 @@ module AbstractController
         assert_equal({'query[person][position][]' => 'prof'        }.to_query, params[3])
       end
 
+      def test_url_action_controller_parameters
+        add_host!
+        assert_raise(ArgumentError) do
+          W.new.url_for(ActionController::Parameters.new(:controller => 'c', :action => 'a', protocol: 'javascript', f: '%0Aeval(name)'))
+        end
+      end
+
       def test_path_generation_for_symbol_parameter_keys
         assert_generates("/image", :controller=> :image)
       end
@@ -448,6 +455,26 @@ module AbstractController
           assert_equal("http://www.basecamphq.com/admin/posts/new?param=value",
             controller.send(:url_for, [:new, :admin, :post, { param: 'value' }])
           )
+        end
+      end
+
+      def test_url_for_with_array_is_unmodified
+        with_routing do |set|
+          set.draw do
+            namespace :admin do
+              resources :posts
+            end
+          end
+
+          kls = Class.new { include set.url_helpers }
+          kls.default_url_options[:host] = 'www.basecamphq.com'
+
+          original_components = [:new, :admin, :post, { param: 'value' }]
+          components = original_components.dup
+
+          kls.new.url_for(components)
+
+          assert_equal(original_components, components)
         end
       end
 

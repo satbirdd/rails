@@ -5,7 +5,7 @@ require 'support/ddl_helper'
 
 module ActiveRecord
   module ConnectionAdapters
-    class SQLite3AdapterTest < ActiveRecord::TestCase
+    class SQLite3AdapterTest < ActiveRecord::SQLite3TestCase
       include DdlHelper
 
       self.use_transactional_tests = false
@@ -284,9 +284,9 @@ module ActiveRecord
 
       def test_tables
         with_example_table do
-          assert_equal %w{ ex }, @conn.tables
+          ActiveSupport::Deprecation.silence { assert_equal %w{ ex }, @conn.tables }
           with_example_table 'id integer PRIMARY KEY AUTOINCREMENT, number integer', 'people' do
-            assert_equal %w{ ex people }.sort, @conn.tables.sort
+            ActiveSupport::Deprecation.silence { assert_equal %w{ ex people }.sort, @conn.tables.sort }
           end
         end
       end
@@ -294,10 +294,12 @@ module ActiveRecord
       def test_tables_logs_name
         sql = <<-SQL
           SELECT name FROM sqlite_master
-          WHERE (type = 'table' OR type = 'view') AND NOT name = 'sqlite_sequence'
+          WHERE type IN ('table','view') AND name <> 'sqlite_sequence'
         SQL
         assert_logged [[sql.squish, 'SCHEMA', []]] do
-          @conn.tables('hello')
+          ActiveSupport::Deprecation.silence do
+            @conn.tables('hello')
+          end
         end
       end
 
@@ -313,11 +315,12 @@ module ActiveRecord
         with_example_table do
           sql = <<-SQL
             SELECT name FROM sqlite_master
-            WHERE (type = 'table' OR type = 'view')
-            AND NOT name = 'sqlite_sequence' AND name = \"ex\"
+            WHERE type IN ('table','view') AND name <> 'sqlite_sequence' AND name = 'ex'
           SQL
           assert_logged [[sql.squish, 'SCHEMA', []]] do
-            assert @conn.table_exists?('ex')
+            ActiveSupport::Deprecation.silence do
+              assert @conn.table_exists?('ex')
+            end
           end
         end
       end
@@ -421,17 +424,20 @@ module ActiveRecord
       end
 
       def test_statement_closed
-        db = SQLite3::Database.new(ActiveRecord::Base.
+        db = ::SQLite3::Database.new(ActiveRecord::Base.
                                    configurations['arunit']['database'])
-        statement = SQLite3::Statement.new(db,
+        statement = ::SQLite3::Statement.new(db,
                                            'CREATE TABLE statement_test (number integer not null)')
-        statement.stubs(:step).raises(SQLite3::BusyException, 'busy')
-        statement.stubs(:columns).once.returns([])
-        statement.expects(:close).once
-        SQLite3::Statement.stubs(:new).returns(statement)
-
-        assert_raises ActiveRecord::StatementInvalid do
-          @conn.exec_query 'select * from statement_test'
+        statement.stub(:step, ->{ raise ::SQLite3::BusyException.new('busy') }) do
+          assert_called(statement, :columns, returns: []) do
+            assert_called(statement, :close) do
+              ::SQLite3::Statement.stub(:new, statement) do
+                assert_raises ActiveRecord::StatementInvalid do
+                  @conn.exec_query 'select * from statement_test'
+                end
+              end
+            end
+          end
         end
       end
 

@@ -51,7 +51,12 @@ module TestHelpers
       old_env = ENV["RAILS_ENV"]
       @app ||= begin
         ENV["RAILS_ENV"] = env
-        require "#{app_path}/config/environment"
+
+        # FIXME: shush Sass warning spam, not relevant to testing Railties
+        Kernel.silence_warnings do
+          require "#{app_path}/config/environment"
+        end
+
         Rails.application
       end
     ensure
@@ -159,19 +164,20 @@ module TestHelpers
       require "rails"
       require "action_controller/railtie"
       require "action_view/railtie"
+      require 'action_dispatch/middleware/flash'
 
-      app = Class.new(Rails::Application)
-      app.config.eager_load = false
-      app.secrets.secret_key_base = "3b7cd727ee24e8444053437c36cc66c4"
-      app.config.session_store :cookie_store, key: "_myapp_session"
-      app.config.active_support.deprecation = :log
-      app.config.active_support.test_order = :random
-      app.config.log_level = :info
+      @app = Class.new(Rails::Application)
+      @app.config.eager_load = false
+      @app.secrets.secret_key_base = "3b7cd727ee24e8444053437c36cc66c4"
+      @app.config.session_store :cookie_store, key: "_myapp_session"
+      @app.config.active_support.deprecation = :log
+      @app.config.active_support.test_order = :random
+      @app.config.log_level = :info
 
-      yield app if block_given?
-      app.initialize!
+      yield @app if block_given?
+      @app.initialize!
 
-      app.routes.draw do
+      @app.routes.draw do
         get "/" => "omg#index"
       end
 
@@ -270,9 +276,9 @@ module TestHelpers
       File.open(file, "w+") { |f| f.puts contents }
     end
 
-    def app_file(path, contents)
+    def app_file(path, contents, mode = 'w')
       FileUtils.mkdir_p File.dirname("#{app_path}/#{path}")
-      File.open("#{app_path}/#{path}", 'w') do |f|
+      File.open("#{app_path}/#{path}", mode) do |f|
         f.puts contents
       end
     end
@@ -296,7 +302,10 @@ module TestHelpers
     end
 
     def boot_rails
-      require File.expand_path('../../../../load_paths', __FILE__)
+      # FIXME: shush Sass warning spam, not relevant to testing Railties
+      Kernel.silence_warnings do
+        require File.expand_path('../../../../load_paths', __FILE__)
+      end
     end
   end
 end

@@ -1,3 +1,9 @@
+## Rails 5.0.0.beta1 (December 18, 2015) ##
+
+*   Add code of conduct to contributing guide
+
+    *Jon Moss*
+
 *   New section in Configuring: Configuring Active Job
 
     *Eliot Sykes*

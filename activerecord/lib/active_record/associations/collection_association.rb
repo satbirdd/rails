@@ -28,6 +28,12 @@ module ActiveRecord
       # Implements the reader method, e.g. foo.items for Foo.has_many :items
       def reader(force_reload = false)
         if force_reload
+          ActiveSupport::Deprecation.warn(<<-MSG.squish)
+            Passing an argument to force an association to reload is now
+            deprecated and will be removed in Rails 5.1. Please call `reload`
+            on the result collection proxy instead.
+          MSG
+
           klass.uncached { reload }
         elsif stale_target?
           reload
@@ -54,8 +60,10 @@ module ActiveRecord
             record.send(reflection.association_primary_key)
           end
         else
-          column  = "#{reflection.quoted_table_name}.#{reflection.association_primary_key}"
-          scope.pluck(column)
+          @association_ids ||= (
+            column = "#{reflection.quoted_table_name}.#{reflection.association_primary_key}"
+            scope.pluck(column)
+          )
         end
       end
 
@@ -406,12 +414,16 @@ module ActiveRecord
 
       def replace_on_target(record, index, skip_callbacks)
         callback(:before_add, record) unless skip_callbacks
+
+        was_loaded = loaded?
         yield(record) if block_given?
 
-        if index
-          @target[index] = record
-        else
-          @target << record
+        unless !was_loaded && loaded?
+          if index
+            @target[index] = record
+          else
+            @target << record
+          end
         end
 
         callback(:after_add, record) unless skip_callbacks
@@ -432,12 +444,7 @@ module ActiveRecord
 
       private
       def get_records
-        if reflection.scope_chain.any?(&:any?) ||
-          scope.eager_loading? ||
-          klass.scope_attributes?
-
-          return scope.to_a
-        end
+        return scope.to_a if skip_statement_cache?
 
         conn = klass.connection
         sc = reflection.association_scope_cache(conn, owner) do

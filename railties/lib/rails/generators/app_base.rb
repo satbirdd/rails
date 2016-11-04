@@ -26,6 +26,12 @@ module Rails
         class_option :template,           type: :string, aliases: '-m',
                                           desc: "Path to some #{name} template (can be a filesystem path or URL)"
 
+        class_option :database,           type: :string, aliases: '-d', default: 'sqlite3',
+                                          desc: "Preconfigure for selected database (options: #{DATABASES.join('/')})"
+
+        class_option :javascript,         type: :string, aliases: '-j', default: 'jquery',
+                                          desc: 'Preconfigure for selected JavaScript library'
+
         class_option :skip_gemfile,       type: :boolean, default: false,
                                           desc: "Don't create a Gemfile"
 
@@ -45,26 +51,17 @@ module Rails
         class_option :skip_active_record, type: :boolean, aliases: '-O', default: false,
                                           desc: 'Skip Active Record files'
 
+        class_option :skip_action_cable,  type: :boolean, aliases: '-C', default: false,
+                                          desc: 'Skip Action Cable files'
+
         class_option :skip_sprockets,     type: :boolean, aliases: '-S', default: false,
                                           desc: 'Skip Sprockets files'
 
         class_option :skip_spring,        type: :boolean, default: false,
                                           desc: "Don't install Spring application preloader"
 
-        class_option :database,           type: :string, aliases: '-d', default: 'sqlite3',
-                                          desc: "Preconfigure for selected database (options: #{DATABASES.join('/')})"
-
-        class_option :javascript,         type: :string, aliases: '-j', default: 'jquery',
-                                          desc: 'Preconfigure for selected JavaScript library'
-
         class_option :skip_javascript,    type: :boolean, aliases: '-J', default: false,
                                           desc: 'Skip JavaScript files'
-
-        class_option :dev,                type: :boolean, default: false,
-                                          desc: "Setup the #{name} with Gemfile pointing to your Rails checkout"
-
-        class_option :edge,               type: :boolean, default: false,
-                                          desc: "Setup the #{name} with Gemfile pointing to Rails repository"
 
         class_option :skip_turbolinks,    type: :boolean, default: false,
                                           desc: 'Skip turbolinks gem'
@@ -72,7 +69,13 @@ module Rails
         class_option :skip_test,          type: :boolean, aliases: '-T', default: false,
                                           desc: 'Skip test files'
 
-        class_option :rc,                 type: :string, default: false,
+        class_option :dev,                type: :boolean, default: false,
+                                          desc: "Setup the #{name} with Gemfile pointing to your Rails checkout"
+
+        class_option :edge,               type: :boolean, default: false,
+                                          desc: "Setup the #{name} with Gemfile pointing to Rails repository"
+
+        class_option :rc,                 type: :string, default: nil,
                                           desc: "Path to file containing extra configuration options for rails command"
 
         class_option :no_rc,              type: :boolean, default: false,
@@ -162,16 +165,21 @@ module Rails
 
       def database_gemfile_entry
         return [] if options[:skip_active_record]
-        GemfileEntry.version gem_for_database, nil,
+        gem_name, gem_version = gem_for_database
+        GemfileEntry.version gem_name, gem_version,
                             "Use #{options[:database]} as the database for Active Record"
       end
 
       def include_all_railties?
-        options.values_at(:skip_active_record, :skip_action_mailer, :skip_test, :skip_sprockets).none?
+        options.values_at(:skip_active_record, :skip_action_mailer, :skip_test, :skip_sprockets, :skip_action_cable).none?
       end
 
       def comment_if(value)
         options[value] ? '# ' : ''
+      end
+
+      def keeps?
+        !options[:skip_keeps]
       end
 
       def sqlite3?
@@ -198,39 +206,63 @@ module Rails
         def self.path(name, path, comment = nil)
           new(name, nil, comment, path: path)
         end
+
+        def version
+          version = super
+
+          if version.is_a?(Array)
+            version.join("', '")
+          else
+            version
+          end
+        end
       end
 
       def rails_gemfile_entry
+        dev_edge_common = [
+        ]
         if options.dev?
           [
-            GemfileEntry.path('rails', Rails::Generators::RAILS_DEV_PATH),
-            GemfileEntry.github('arel', 'rails/arel')
-          ]
+            GemfileEntry.path('rails', Rails::Generators::RAILS_DEV_PATH)
+          ] + dev_edge_common
         elsif options.edge?
           [
-            GemfileEntry.github('rails', 'rails/rails'),
-            GemfileEntry.github('arel', 'rails/arel')
-          ]
+            GemfileEntry.github('rails', 'rails/rails')
+          ] + dev_edge_common
         else
           [GemfileEntry.version('rails',
-                            Rails::VERSION::STRING,
+                            rails_version_specifier,
                             "Bundle edge Rails instead: gem 'rails', github: 'rails/rails'")]
+        end
+      end
+
+      def rails_version_specifier(gem_version = Rails.gem_version)
+        if gem_version.prerelease?
+          next_series = gem_version
+          next_series = next_series.bump while next_series.segments.size > 2
+
+          [">= #{gem_version}", "< #{next_series}"]
+        elsif gem_version.segments.size == 3
+          "~> #{gem_version}"
+        else
+          patch = gem_version.segments[0, 3].join(".")
+          ["~> #{patch}", ">= #{gem_version}"]
         end
       end
 
       def gem_for_database
         # %w( mysql oracle postgresql sqlite3 frontbase ibm_db sqlserver jdbcmysql jdbcsqlite3 jdbcpostgresql )
         case options[:database]
-        when "oracle"         then "ruby-oci8"
-        when "postgresql"     then "pg"
-        when "frontbase"      then "ruby-frontbase"
-        when "mysql"          then "mysql2"
-        when "sqlserver"      then "activerecord-sqlserver-adapter"
-        when "jdbcmysql"      then "activerecord-jdbcmysql-adapter"
-        when "jdbcsqlite3"    then "activerecord-jdbcsqlite3-adapter"
-        when "jdbcpostgresql" then "activerecord-jdbcpostgresql-adapter"
-        when "jdbc"           then "activerecord-jdbc-adapter"
-        else options[:database]
+        when "oracle"         then ["ruby-oci8", nil]
+        when "postgresql"     then ["pg", ["~> 0.18"]]
+        when "frontbase"      then ["ruby-frontbase", nil]
+        when "mysql"          then ["mysql2", [">= 0.3.18", "< 0.5"]]
+        when "sqlserver"      then ["activerecord-sqlserver-adapter", nil]
+        when "jdbcmysql"      then ["activerecord-jdbcmysql-adapter", nil]
+        when "jdbcsqlite3"    then ["activerecord-jdbcsqlite3-adapter", nil]
+        when "jdbcpostgresql" then ["activerecord-jdbcpostgresql-adapter", nil]
+        when "jdbc"           then ["activerecord-jdbc-adapter", nil]
+        else [options[:database], nil]
         end
       end
 
@@ -261,7 +293,7 @@ module Rails
 
       def jbuilder_gemfile_entry
         comment = 'Build JSON APIs with ease. Read more: https://github.com/rails/jbuilder'
-        GemfileEntry.version('jbuilder', '~> 2.0', comment)
+        GemfileEntry.new 'jbuilder', '~> 2.0', comment, {}, options[:api]
       end
 
       def coffee_gemfile_entry
@@ -355,7 +387,7 @@ module Rails
       end
 
       def keep_file(destination)
-        create_file("#{destination}/.keep") unless options[:skip_keeps]
+        create_file("#{destination}/.keep") if keeps?
       end
     end
   end
